@@ -192,5 +192,13 @@ cockpit-iot-updater/
 ├── tools/
 │   └── make-bundle.sh            ← Run on staging machine to generate .iotupdate bundles
 └── docs/
-    └── BUNDLING.md               ← Detailed bundle creation guide
+    ├── ARCHITECTURE.md           ← Technical deep-dive: state machine, endpoints, file locations
+    ├── BUNDLING.md               ← Detailed bundle creation guide (OSTree mirror setup, etc.)
+    └── TROUBLESHOOTING.md        ← Common errors and fixes
 ```
+
+## Further reading
+
+- [Architecture & technical reference](docs/ARCHITECTURE.md) — state machine, HTTP protocol, bundle format internals, extending the project
+- [Bundle creation guide](docs/BUNDLING.md) — how to set up an OSTree mirror, find commits, generate and verify bundles
+- [Troubleshooting](docs/TROUBLESHOOTING.md) — sidecar not reachable, upload failures, ostree errors, manual apply
