@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — install cockpit-iot-updater on a Fedora IoT 43 device
+# install.sh — install cockpit-iot-updater on a bootc-managed Fedora IoT 43 device
 # Run as root on the target device.
 #
 # Usage:
@@ -9,57 +9,72 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/legopc/cockpit-iot-updater"
 LIB_DIR="/var/lib/iot-updater"
-COCKPIT_DIR="/usr/share/cockpit/iot-updater"
+COCKPIT_SYSTEM="/usr/share/cockpit/iot-updater"
+COCKPIT_USER="${HOME}/.local/share/cockpit/iot-updater"
 
 echo "════════════════════════════════════════════════════"
 echo "  cockpit-iot-updater installer"
-echo "  Target: Fedora IoT 43 (rpm-ostree managed)"
+echo "  Target: Fedora IoT 43 (bootc / OCI managed)"
 echo "════════════════════════════════════════════════════"
 echo ""
 
 [[ $EUID -eq 0 ]] || { echo "ERROR: Run as root (sudo)"; exit 1; }
 
 # Check required tools
-for cmd in ostree rpm-ostree systemctl python3 tar; do
+for cmd in systemctl python3 tar; do
     command -v "$cmd" > /dev/null 2>&1 || { echo "ERROR: '$cmd' not found"; exit 1; }
 done
 
-command -v cockpit-bridge > /dev/null 2>&1 \
-    || { echo "WARNING: cockpit-bridge not found. Install cockpit first:"; \
-         echo "  rpm-ostree install cockpit"; \
-         echo "  systemctl reboot"; exit 1; }
+# Check bootc
+if ! command -v bootc > /dev/null 2>&1; then
+    echo "ERROR: 'bootc' not found."
+    echo "  This installer requires a bootc-managed system (Fedora IoT 43+)."
+    echo "  Install bootc with: rpm-ostree install bootc && systemctl reboot"
+    exit 1
+fi
+
+# Check skopeo
+if ! command -v skopeo > /dev/null 2>&1; then
+    echo "ERROR: 'skopeo' not found."
+    echo "  Install with: rpm-ostree install skopeo && systemctl reboot"
+    exit 1
+fi
+
+# Check Cockpit
+if ! command -v cockpit-bridge > /dev/null 2>&1; then
+    echo "WARNING: cockpit-bridge not found. Install cockpit first:"
+    echo "  rpm-ostree install cockpit && systemctl reboot"
+    echo "  Then re-run this installer."
+    exit 1
+fi
 
 # Find script directory (works whether run from clone or via curl)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "[1/5] Creating directories…"
 mkdir -p "$LIB_DIR"
-mkdir -p "$COCKPIT_DIR"
-mkdir -p /var/lib/iot-updater
 
 echo "[2/5] Installing sidecar server…"
-install -m 755 "$SCRIPT_DIR/sidecar/server.py" "$LIB_DIR/server.py"
-install -m 755 "$SCRIPT_DIR/scripts/apply-update.sh" "$LIB_DIR/apply-update.sh"
+install -m 755 "$SCRIPT_DIR/sidecar/server.py"         "$LIB_DIR/server.py"
+install -m 755 "$SCRIPT_DIR/scripts/apply-update.sh"   "$LIB_DIR/apply-update.sh"
 
 echo "[3/5] Installing Cockpit page…"
-# On OCI-based Fedora IoT, /usr/share/cockpit is read-only.
+# On OCI-based Fedora IoT, /usr/share/cockpit may be read-only (composefs).
 # Fall back to user-local path which Cockpit also scans.
 if touch /usr/share/cockpit/.writetest 2>/dev/null; then
     rm -f /usr/share/cockpit/.writetest
-    install -d -m 755 "$COCKPIT_DIR"
-    install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$COCKPIT_DIR/manifest.json"
-    install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$COCKPIT_DIR/index.html"
-    install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$COCKPIT_DIR/update.js"
-    echo "   Installed to $COCKPIT_DIR (system-wide)"
+    install -d -m 755 "$COCKPIT_SYSTEM"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$COCKPIT_SYSTEM/manifest.json"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$COCKPIT_SYSTEM/index.html"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$COCKPIT_SYSTEM/update.js"
+    echo "   Installed to $COCKPIT_SYSTEM (system-wide)"
 else
-    USER_COCKPIT="${HOME}/.local/share/cockpit/iot-updater"
-    mkdir -p "$USER_COCKPIT"
-    install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$USER_COCKPIT/manifest.json"
-    install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$USER_COCKPIT/index.html"
-    install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$USER_COCKPIT/update.js"
-    echo "   /usr/share/cockpit is read-only (OCI image) — installed to $USER_COCKPIT"
+    mkdir -p "$COCKPIT_USER"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$COCKPIT_USER/manifest.json"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$COCKPIT_USER/index.html"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$COCKPIT_USER/update.js"
+    echo "   /usr/share/cockpit is read-only (OCI image) — installed to $COCKPIT_USER"
     echo "   Page will be visible when logged into Cockpit as: $(whoami)"
 fi
 

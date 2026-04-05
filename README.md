@@ -1,26 +1,36 @@
 # cockpit-iot-updater
 
-A Cockpit web UI page for delivering and applying ~2 GB OSTree update bundles to
-Fedora IoT 43 devices — without touching the command line.
+A Cockpit web UI page for delivering and applying ~2 GB OCI container image updates to
+**bootc-managed** Fedora IoT 43 devices — without touching the command line.
+
+## Features
+
+- **Chunked upload** — streams 2 GB bundles in 8 MB chunks; no browser memory issues
+- **Version preview** — reads `version.json` from the bundle before committing the upload
+- **SHA-256 integrity** — bundle hash is computed at build time and verified server-side before apply
+- **bootc status panel** — shows booted / staged / rollback deployment info from `bootc status`
+- **One-click rollback** — rolls back to the previous deployment slot via `bootc rollback`
+- **Update history** — timestamped log of all updates applied through the UI
+- **Sidecar API** — lightweight Python stdlib HTTP server; no external dependencies
 
 ## How it works
 
 ```
-Browser (Cockpit page, port 9090)
-  → chunked HTTP upload (8 MB chunks via fetch)
-    → Python sidecar on 127.0.0.1:8088
-       → streams bundle to /var/tmp/ (no RAM buffer)
-       → extracts version.json → shows preview in UI
-       → on confirm → systemctl start iot-update.service
-          → ostree static-delta apply-offline
-          → rpm-ostree deploy <commit>
-          → reboot
+Browser (Cockpit session, port 9090, TLS)
+  └─► cockpit.http(8088)  [routes through Cockpit bridge WebSocket]
+        └─► Python sidecar on 127.0.0.1:8088
+              ├─ streams bundle to /var/tmp/   (no RAM buffer)
+              ├─ reads version.json → shows preview in UI
+              ├─ verifies SHA-256 hash
+              └─ on confirm → systemctl start iot-update.service
+                    └─ skopeo copy oci-archive:image.tar containers-storage:…
+                    └─ bootc switch --transport containers-storage …
+                    └─ reboot
 ```
 
-Cockpit's built-in bridge **cannot** handle 2 GB files (128 KB limit).
+Cockpit's built-in bridge cannot handle 2 GB files (128 KB message limit).
 This project uses a lightweight Python stdlib sidecar for the actual transfer.
-
----
+The sidecar binds to `127.0.0.1` only — never directly reachable from the network.
 
 ## Install on the device
 
@@ -30,175 +40,110 @@ cd cockpit-iot-updater
 sudo ./install.sh
 ```
 
-Or one-liner:
-```bash
-curl -fsSL https://raw.githubusercontent.com/legopc/cockpit-iot-updater/main/install.sh | sudo bash
-```
-
 **Requirements:**
-- Fedora IoT 43 (rpm-ostree managed)
-- `cockpit` installed: `rpm-ostree install cockpit && systemctl reboot`
+- Fedora IoT 43 managed by `bootc` (OCI image transport)
+- `cockpit` installed and running (`systemctl enable --now cockpit.socket`)
+- `skopeo` — for OCI archive import (`sudo rpm-ostree install skopeo`)
+- `bootc` — bootc v1.14+ (included in recent Fedora IoT 43 images)
 - Python 3 (included in Fedora IoT base)
 
 **After install:**
 1. Open `https://<device-ip>:9090` in a browser
 2. Log in with your system credentials
-3. Click **IoT Updater** in the sidebar
+3. Click **IoT Updater** in the Cockpit sidebar
 
----
+## Generating update bundles (on the build host)
 
-## Generating update bundles (on a staging machine)
+Bundles are created **offline on the build host** (PRX-01 or any machine with podman).
+See [docs/BUILDING-UPDATES.md](docs/BUILDING-UPDATES.md) for the full guide.
 
-Bundles are created **offline on a developer machine** — not on the IoT device.
-
-### Prerequisites
-
-```bash
-# Fedora/RHEL staging machine with internet access
-sudo dnf install ostree
-```
-
-### Step 1 — Build or pull the updated OSTree commit
-
-If you're composing Fedora IoT images yourself:
-```bash
-# After composing, your repo is at e.g. /srv/fedora-iot-repo
-# Find the new commit:
-ostree --repo=/srv/fedora-iot-repo log fedora/stable/aarch64/iot
-```
-
-If using an upstream Fedora IoT repo:
-```bash
-ostree --repo=/srv/local-mirror pull \
-    https://ostree.fedoraproject.org/iot \
-    fedora/stable/aarch64/iot
-```
-
-### Step 2 — Find the base and target commits
+Quick reference:
 
 ```bash
-# Currently deployed commit on the device (run on the device):
-rpm-ostree status --json | python3 -c \
-    "import json,sys; d=json.load(sys.stdin); print(d['deployments'][0]['checksum'])"
+# Build the OCI image (on build host)
+cd /mnt/inferno-build/inferno-aoip-releases
+podman build -t inferno-appliance:v9 .
 
-# Target commit (on staging machine):
-ostree --repo=/srv/fedora-iot-repo rev-parse fedora/stable/aarch64/iot
+# Package it as a .iotupdate bundle
+tools/make-oci-bundle.sh \
+    --image       inferno-appliance:v9 \
+    --version     v9 \
+    --description "Add IoT Updater baked in; sha256 integrity; rollback UI" \
+    --out         /tmp/inferno-appliance-v9.iotupdate
 ```
 
-### Step 3 — Generate the bundle
-
-```bash
-./tools/make-bundle.sh \
-    --version     43.1.2 \
-    --description "Kernel 6.12.15 + security updates" \
-    --repo        /srv/fedora-iot-repo \
-    --from        <current-device-commit> \
-    --to          <target-commit> \
-    --out         /tmp/iot43-43.1.2.iotupdate
-```
-
-Output: a single `.iotupdate` file (~2 GB) containing:
-- `version.json` — version metadata
-- `update.delta` — OSTree static delta
-
-### Step 4 — Upload via Cockpit
+## Uploading an update
 
 1. Open the Cockpit IoT Updater page
-2. Drag and drop (or browse for) the `.iotupdate` file
-3. Review the version preview — the page reads `version.json` before committing the full upload
-4. Click **Apply vX.X.X**
-5. Confirm the reboot dialog
-6. Device applies the update and reboots automatically
-
----
-
-## Version numbering convention
-
-```
-FEDORA_MAJOR.MINOR.PATCH
-```
-
-| Part          | Meaning |
-|---------------|---------|
-| FEDORA_MAJOR  | Fedora IoT release (43, 44, …) |
-| MINOR         | Significant feature or config change |
-| PATCH         | Security/bugfix-only update |
-
-Example: `43.1.2` = Fedora IoT 43, minor release 1, bugfix 2.
-
-The version is embedded in `version.json` inside the bundle — the bundle is the
-single source of truth.
-
----
-
-## Version history
-
-The Cockpit page includes a **Version History** tab showing all updates applied
-via this tool: version, timestamp, OSTree commit hashes, and status (applied / error).
-
-History is stored at `/var/lib/iot-updater/history.json` on the device
-(writable `/var` partition, persists across updates).
-
----
+2. Drag-and-drop (or browse for) the `.iotupdate` file
+3. Review the version preview — SHA-256 hash shown for verification
+4. Click **Apply vN** and confirm
+5. Wait for progress bar — `skopeo copy` takes 1–3 minutes at ~50%
+6. Device reboots automatically; Cockpit reconnects to the new version
 
 ## Rollback
 
-If an update causes problems, rpm-ostree rollback is supported natively:
+After a successful update, the previous deployment becomes the rollback slot.
+The **Rollback** button appears automatically in the bootc status panel.
 
-```bash
-rpm-ostree rollback
-systemctl reboot
+Clicking Rollback:
+1. Calls `bootc rollback --apply`
+2. Reboots to the previous deployment
+3. Current deployment becomes the new rollback slot
+
+> **Note:** `/etc` changes are not carried back during rollback. Rollback is a
+> bootc-native operation — it switches the OS layer only.
+
+## Security
+
+- Sidecar binds to `127.0.0.1:8088` only — not reachable from the network
+- All browser ↔ sidecar traffic flows through the Cockpit bridge WebSocket (TLS on port 9090)
+- Bundle SHA-256 is verified server-side before `skopeo copy` runs
+- No user-controlled paths are passed to the shell
+- Sidecar runs as root (required for `systemctl start iot-update.service`)
+
+## Version history convention
+
+```
+vMAJOR
 ```
 
-This boots the previous OSTree deployment (always kept by rpm-ostree).
-
----
-
-## Security notes
-
-- The sidecar binds to `127.0.0.1:8088` only — not reachable from the network
-- Cockpit authentication (port 9090) is the access gate
-- Bundle path is hardcoded (`/var/tmp/iot43-update.iotupdate`) — no user-controlled paths are passed to the shell
-- The sidecar runs as root (required for `systemctl start iot-update.service` and `/var/tmp` write)
-
----
-
-## Caveats
-
-- **Fedora IoT `/usr` is read-only** — the install script places files under `/var/lib/` and `/usr/share/cockpit/` via a writable overlay (Fedora IoT supports writes to `/usr` via `rpm-ostree install` or direct write to the composefs overlay — verify on your specific build)
-- **Space**: ensure `/var/tmp` has at least 2× the bundle size free before uploading
-- **Reboot disconnect**: when the device reboots, the Cockpit session disconnects — this is expected
-- **Single update at a time**: concurrent uploads are rejected with HTTP 409
-- **Bundle compatibility**: the `from_commit` in the bundle must match the commit currently deployed on the device, or ostree will reject the delta
-
----
+Example: `v9` = ninth appliance image revision.
+The version string is embedded in `version.json` inside the bundle.
 
 ## Project structure
 
 ```
 cockpit-iot-updater/
-├── install.sh                    ← installer for the device
+├── install.sh                     ← installer for the device
 ├── sidecar/
-│   └── server.py                 ← Python stdlib HTTP receiver (127.0.0.1:8088)
+│   └── server.py                  ← Python stdlib sidecar (127.0.0.1:8088)
 ├── scripts/
-│   └── apply-update.sh           ← ostree apply + rpm-ostree deploy + reboot
+│   └── apply-update.sh            ← sha256 verify + skopeo + bootc switch + reboot
 ├── cockpit-page/
-│   ├── manifest.json             ← Cockpit plugin registration
-│   ├── index.html                ← Upload + History tabs
-│   └── update.js                 ← Chunked upload logic, version preview, status polling
+│   ├── manifest.json              ← Cockpit plugin registration
+│   ├── index.html                 ← Upload, status, rollback UI
+│   └── update.js                  ← Chunked upload, bootc status polling, rollback
 ├── systemd/
-│   ├── iot-updater.service       ← Persistent sidecar (always running)
-│   └── iot-update.service        ← Oneshot update apply (started on demand)
+│   ├── iot-updater.service        ← Persistent sidecar (always running)
+│   └── iot-update.service         ← Oneshot update apply (started on demand)
 ├── tools/
-│   └── make-bundle.sh            ← Run on staging machine to generate .iotupdate bundles
+│   ├── make-oci-bundle.sh         ← Packages podman image into .iotupdate
+│   └── sync-to-appliance.sh      ← Copies updater files into appliance source repo
 └── docs/
-    ├── ARCHITECTURE.md           ← Technical deep-dive: state machine, endpoints, file locations
-    ├── BUNDLING.md               ← Detailed bundle creation guide (OSTree mirror setup, etc.)
-    └── TROUBLESHOOTING.md        ← Common errors and fixes
+    ├── ARCHITECTURE.md            ← Technical reference: state machine, endpoints, file locations
+    ├── BUNDLING.md                ← Bundle format reference (→ BUILDING-UPDATES.md for guide)
+    ├── BUILDING-UPDATES.md        ← Full guide: build on PRX-01, create bundle, apply, rollback
+    ├── SIDECAR-API.md             ← HTTP API reference for all sidecar endpoints
+    ├── DEPLOYMENT-V9.md           ← Step-by-step v9 release guide (ISO + upgrade bundle)
+    └── TROUBLESHOOTING.md         ← Common errors and fixes
 ```
 
 ## Further reading
 
-- [Architecture & technical reference](docs/ARCHITECTURE.md) — state machine, HTTP protocol, bundle format internals, extending the project
-- [Bundle creation guide](docs/BUNDLING.md) — how to set up an OSTree mirror, find commits, generate and verify bundles
-- [Troubleshooting](docs/TROUBLESHOOTING.md) — sidecar not reachable, upload failures, ostree errors, manual apply
+- [Architecture & technical reference](docs/ARCHITECTURE.md)
+- [Bundle format](docs/BUNDLING.md)
+- [Building & delivering updates](docs/BUILDING-UPDATES.md)
+- [Sidecar API reference](docs/SIDECAR-API.md)
+- [v9 Deployment guide](docs/DEPLOYMENT-V9.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)

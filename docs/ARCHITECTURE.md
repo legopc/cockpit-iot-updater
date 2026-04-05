@@ -4,306 +4,196 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Browser (Cockpit session, port 9090)                          │
+│  Browser (Cockpit session, port 9090, TLS)                     │
 │  ┌────────────────────────────────────────────────────────┐    │
 │  │  cockpit-page/index.html + update.js                   │    │
 │  │  • Drag-drop file picker                               │    │
-│  │  • Reads bundle version.json before committing upload  │    │
-│  │  • Sends 8 MB chunks via fetch() to sidecar            │    │
-│  │  • Polls /status every 2 s for live progress           │    │
-│  │  • History tab reads /history from sidecar             │    │
-│  └─────────────────────┬──────────────────────────────────┘    │
-└────────────────────────│────────────────────────────────────────┘
-                         │ HTTP (chunked POST, GET)
-                         ▼ 127.0.0.1:8088
+│  │  • Reads version.json before committing upload         │    │
+│  │  • Sends 8 MB chunks via cockpit.http()                │    │
+│  │  • Polls /status every 2s during apply                 │    │
+│  │  • Polls /bootc-status every 10s for deployment info   │    │
+│  │  • Displays SHA-256 hash in version preview            │    │
+│  │  • Rollback button shown when rollback slot exists     │    │
+│  └────────────────────────────────────────────────────────┘    │
+│        │  cockpit.http(8088)  ← routes through bridge WS       │
+└────────│────────────────────────────────────────────────────────┘
+         │
+         ▼  TCP 127.0.0.1:8088  (loopback only)
 ┌─────────────────────────────────────────────────────────────────┐
-│  sidecar/server.py  (iot-updater.service, always running)      │
-│  • POST /upload/start  — reset state, prepare for new upload   │
-│  • POST /upload        — receive chunk, append to bundle file  │
-│  • GET  /status        — return current stage + progress JSON  │
-│  • GET  /history       — return history.json contents          │
-│  • POST /upload/apply  — trigger iot-update.service            │
-│  • POST /upload/cancel — delete partial bundle, reset state    │
-│                                                                  │
-│  On last chunk: extracts version.json from tar bundle           │
-│  On apply:      systemctl start iot-update.service              │
-└─────────────────────┬───────────────────────────────────────────┘
-                      │ systemctl start
-                      ▼
+│  sidecar/server.py  (iot-updater.service, root)                │
+│                                                                 │
+│  State machine:                                                 │
+│    idle → uploading → verifying → staged → applying → idle     │
+│    (any stage can transition to error on failure)              │
+│                                                                 │
+│  Upload storage: /var/tmp/iot43-update.iotupdate               │
+│  History:        /var/lib/iot-updater/history.json             │
+│  Apply signal:   systemctl start iot-update.service            │
+│  Status file:    /var/lib/iot-updater/status.json              │
+└─────────────────────────────────────────────────────────────────┘
+         │  systemctl start iot-update.service
+         ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  iot-update.service  (oneshot, root)                           │
-│  → scripts/apply-update.sh                                     │
-│     1. Validate bundle exists + size > 1 MB                    │
-│     2. tar extract: version.json + update.delta → /var/tmp/    │
-│     3. ostree static-delta apply-offline update.delta           │
-│     4. rpm-ostree deploy :<to_commit>                          │
-│     5. Update /var/lib/iot-updater/history.json status         │
-│     6. rm bundle + delta + version.json                        │
-│     7. sleep 5 && systemctl reboot                             │
-│                                                                  │
-│  Status written to /run/iot-update-status.json at each step    │
-│  (sidecar reads and re-exposes this via GET /status)           │
+│  scripts/apply-update.sh  (iot-update.service, root, oneshot)  │
+│                                                                 │
+│  1. Reads version.json from bundle                             │
+│  2. Verifies SHA-256 hash (if present in version.json)         │
+│  3. Extracts image.tar from bundle (to /var/tmp/)              │
+│  4. skopeo copy oci-archive:/var/tmp/image.tar                 │
+│        containers-storage:localhost/inferno-appliance:vN        │
+│  5. bootc switch --transport containers-storage …              │
+│  6. Writes {stage:idle} to status.json                         │
+│  7. systemctl reboot                                           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## File locations on Fedora IoT device
+## Why cockpit.http() instead of fetch()
 
-| Path | Purpose | Persistent? |
-|------|---------|-------------|
-| `/var/lib/iot-updater/server.py` | Sidecar server | ✅ (survives updates) |
-| `/var/lib/iot-updater/apply-update.sh` | Update script | ✅ |
-| `/var/lib/iot-updater/history.json` | Applied update log | ✅ |
-| `/usr/share/cockpit/iot-updater/` | Cockpit page files | ⚠️ See note |
-| `/etc/systemd/system/iot-updater.service` | Persistent sidecar unit | ⚠️ See note |
-| `/etc/systemd/system/iot-update.service` | Oneshot apply unit | ⚠️ See note |
-| `/var/tmp/iot43-update.iotupdate` | Upload staging (temp) | ❌ Deleted after apply |
-| `/var/tmp/iot43-update.delta` | Extracted delta (temp) | ❌ Deleted after apply |
-| `/run/iot-update-status.json` | Live progress (tmpfs) | ❌ Lost on reboot |
-
-> **Note on rpm-ostree + `/usr` and `/etc`:**
-> Fedora IoT's `/usr` is managed by OSTree. Writing to `/usr/share/cockpit/` directly is possible
-> on a running system but may be **overwritten on the next OSTree update**. For permanent
-> installation, the correct approach is to layer the package:
-> ```bash
-> rpm-ostree install cockpit-iot-updater   # once packaged as RPM
-> ```
-> Until an RPM exists, the install.sh approach works for development/testing.
-> `/var/lib/` and `/var/tmp/` are always writable and survive updates.
-> `/etc/systemd/system/` is writable and persists (it's in the OSTree "3-way merge" layer).
+Cockpit 359+ enforces a strict Content Security Policy that blocks `fetch()` calls
+from the Cockpit HTTPS page to `http://127.0.0.1`. The only supported way to reach
+the sidecar is via `cockpit.http(port)`, which routes through the Cockpit bridge
+WebSocket (already TLS). No HTTPS is needed on the sidecar itself.
 
 ---
 
-## Bundle format: `.iotupdate`
+## File locations on the device
 
-A `.iotupdate` file is a plain **uncompressed tar archive** containing exactly two files:
+| Path | Purpose |
+|------|---------|
+| `/var/lib/iot-updater/server.py` | Sidecar HTTP server |
+| `/var/lib/iot-updater/apply-update.sh` | Update apply script (run as root by iot-update.service) |
+| `/var/lib/iot-updater/history.json` | Persistent update history |
+| `/var/lib/iot-updater/status.json` | Written by apply-update.sh to signal completion |
+| `/var/tmp/iot43-update.iotupdate` | Bundle landing zone (temporary) |
+| `/var/tmp/iot-update-work/` | Working directory during apply (image.tar extracted here) |
+| `/etc/systemd/system/iot-updater.service` | Persistent sidecar unit |
+| `/etc/systemd/system/iot-update.service` | Oneshot apply unit (started on demand) |
+| `~/.local/share/cockpit/iot-updater/` | Cockpit page (user-local install, no root needed) |
+| `/usr/share/cockpit/iot-updater/` | Cockpit page (system-wide install, requires writable /usr) |
+
+---
+
+## Bundle format (.iotupdate)
+
+A `.iotupdate` file is a standard tar archive containing exactly two files:
 
 ```
-iot43-43.1.2.iotupdate (tar)
-├── version.json      ← always first in the archive (small, read immediately)
-└── update.delta      ← OSTree static delta (the bulk of the size, ~2 GB)
+bundle.iotupdate
+├── version.json       ← metadata (read first by sidecar and UI)
+└── image.tar          ← OCI image archive (skopeo-compatible)
 ```
 
-### `version.json` schema
+### version.json schema
 
 ```json
 {
-  "version":          "43.1.2",
-  "build_date":       "2026-04-05",
-  "description":      "Kernel 6.12.15 + security updates",
-  "from_commit":      "<full 64-char OSTree commit hash>",
-  "to_commit":        "<full 64-char OSTree commit hash>",
-  "fedora_ref":       "fedora/stable/aarch64/iot",
-  "generator":        "make-bundle.sh",
-  "generator_version":"1"
+  "version":      "v9",
+  "description":  "Add IoT Updater baked in; sha256 integrity; rollback UI",
+  "built_at":     "2025-05-14T12:00:00Z",
+  "image_name":   "inferno-appliance",
+  "image_sha256": "abc123..."
 }
 ```
 
-`version.json` is placed **first in the tar** so `tarfile.getmember()` can extract it without
-reading the full 2 GB delta. This is how the UI shows the version preview before the upload
-is committed.
-
-### Why uncompressed tar?
-
-- The OSTree delta is already compressed internally
-- Adding gzip on top gains negligible space and adds minutes to bundle creation
-- Uncompressed tar allows streaming extraction without buffering the whole file
+- `image_sha256` is the SHA-256 of `image.tar` inside the bundle.
+- The sidecar streams through `image.tar` in-memory (no extraction) to verify the hash.
 
 ---
 
-## Upload protocol: chunked HTTP
-
-The browser splits the file client-side and sends each chunk as a separate HTTP POST:
+## Sidecar state machine
 
 ```
-POST /upload/start                        ← reset state machine
-  → 200 {ok: true}
-
-POST /upload  (chunk 0)
-  Headers: X-Chunk-Index: 0
-           X-Total-Chunks: 256
-           Content-Length: 8388608        ← 8 MB
-  Body: <binary chunk>
-  → 200 {chunk: 0, progress: 0}
-
-POST /upload  (chunk 1..N-1)
-  ...
-  → 200 {chunk: N-1, progress: 99}
-
-POST /upload  (chunk N — last)
-  → sidecar extracts version.json from completed bundle
-  → 200 {chunk: N, progress: 100}
-    state transitions to: idle (bundle ready) or error
-
-GET /status                               ← poll every 2 s
-  → {stage, progress_pct, message, version_info}
-
-POST /upload/apply                        ← user confirms
-  → systemctl start iot-update.service
-
-GET /status                               ← continues to poll through apply + reboot
-```
-
-### State machine
-
-```
-idle ──[start upload]──► uploading ──[last chunk received]──► extracting
-  ▲                                                               │
-  │                                          ┌────────────────────┘
-  │                          [version.json OK]│   [version.json missing/invalid]
-  │                                           ▼                   ▼
-  └──────────────────────[apply confirmed]── idle               error
-                                              │                   │
-                                              ▼                   └──[start]──► idle
-                                           queued
-                                              │
-                                              ▼
-                                          applying ──► rebooting
+        ┌──────────────────────────────────────────────────────────┐
+        │                                                          │
+  POST /upload/start                                    POST /upload/cancel
+        │                                                    ▲
+        ▼                                                    │
+     uploading ──────── 8 MB chunks via POST /upload ────────┤
+        │                                                    │
+        │  (all chunks received)                             │
+        ▼                                                    │
+     verifying ── reads version.json, verifies SHA-256 ──────┤
+        │                                                    │
+        │  POST /upload/apply                                │
+        ▼                                                    │
+      staged ─── user reviews preview ───────────────────────┤
+        │                                                    │
+        │  (systemctl start iot-update.service)              │
+        ▼                                                    │
+     applying ── apply-update.sh running ────────────────────┤
+        │                                                    │
+        │  (apply-update.sh writes status.json → idle)       │
+        ▼                                                    │
+       idle ◄──────── POST /rollback (also reboot) ──────────┘
+        │
+        │  (any unhandled exception)
+        ▼
+      error ──── POST /upload/cancel or POST /rollback ───► idle
 ```
 
 ---
 
-## Sidecar HTTP endpoints reference
+## Sidecar API summary
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `POST` | `/upload/start` | — | Begin new upload session (resets state) |
-| `POST` | `/upload` | — | Receive one chunk. Headers: `X-Chunk-Index`, `X-Total-Chunks` |
-| `POST` | `/upload/apply` | — | Trigger `iot-update.service` after bundle is ready |
-| `POST` | `/upload/cancel` | — | Delete bundle, reset to idle |
-| `GET`  | `/status` | — | Current state: `{stage, progress_pct, message, version_info, error}` |
-| `GET`  | `/history` | — | All applied updates: list of history entries |
-| `GET`  | `/version-preview` | — | `version_info` for the current ready bundle |
+See [SIDECAR-API.md](SIDECAR-API.md) for the full endpoint reference.
 
-> Authentication is provided by Cockpit's login page (port 9090). The sidecar binds to
-> `127.0.0.1` only, so it is not directly reachable from the network — all traffic routes
-> through the browser session authenticated by Cockpit.
-
----
-
-## Version numbering
-
-```
-FEDORA_MAJOR . MINOR . PATCH
-     43      .   1   .   2
-```
-
-| Part | Increments when |
-|------|----------------|
-| `FEDORA_MAJOR` | Moving to a new Fedora release (43 → 44) |
-| `MINOR` | Feature additions, config changes, kernel upgrades |
-| `PATCH` | Security patches, bugfixes only |
-
-The page performs a version comparison to detect downgrades:
-```js
-function versionCompare(a, b) {
-    const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        const diff = (pa[i] || 0) - (pb[i] || 0);
-        if (diff !== 0) return diff;
-    }
-    return 0;
-}
-```
-A downgrade shows a warning and requires the user to check a confirmation box.
+| Method | Endpoint | Description |
+|--------|---------|-------------|
+| GET | `/status` | Current upload/apply state + progress |
+| GET | `/history` | All past update records |
+| GET | `/bootc-status` | `bootc status` JSON — booted/staged/rollback deployments |
+| GET | `/version-preview?file=<path>` | Parse version.json from a staged bundle |
+| POST | `/upload/start` | Begin upload session (filename, size) |
+| POST | `/upload` | Send one 8 MB chunk |
+| POST | `/upload/apply` | Confirm staged bundle, start apply |
+| POST | `/upload/cancel` | Abort upload, return to idle |
+| POST | `/rollback` | Run `bootc rollback --apply` (stages rollback + reboots) |
 
 ---
 
-## `history.json` format
+## OCI apply path — step by step
 
-```json
-[
-  {
-    "version": "43.1.1",
-    "from_commit": "abc123...",
-    "to_commit": "def456...",
-    "description": "Initial deploy",
-    "applied_at": "2026-04-05T06:00:00Z",
-    "applied_at_complete": "2026-04-05T06:08:22Z",
-    "status": "applied"
-  }
-]
-```
-
-Possible `status` values: `applying`, `applied`, `error`, `rolledback`.
-The sidecar appends an `applying` entry on `POST /upload/apply`, then `apply-update.sh`
-updates it to `applied` (or `error`) upon completion.
+1. **Upload** — sidecar streams chunks to `/var/tmp/iot43-update.iotupdate`
+2. **Verify** — sidecar opens tar, streams `image.tar` through `hashlib.sha256()` in memory
+3. **Staged** — version.json is parsed; UI shows preview with hash
+4. **Apply** — `iot-update.service` starts `apply-update.sh` as root:
+   - Re-verifies SHA-256 with `sha256sum`
+   - Extracts `image.tar` to `/var/tmp/iot-update-work/`
+   - `skopeo copy oci-archive:/var/tmp/iot-update-work/image.tar containers-storage:localhost/inferno-appliance:vN`
+   - `bootc switch --transport containers-storage localhost/inferno-appliance:vN`
+   - Writes `{stage: idle}` to `/var/lib/iot-updater/status.json`
+   - `systemctl reboot`
+5. **Rollback** — after a successful update, old image sits in the bootc rollback slot.
+   `POST /rollback` → `bootc rollback --apply` → reboots into old image.
 
 ---
 
-## OCI-based deployment (Inferno Appliance images)
+## bootc status polling
 
-This project was tested on a Fedora IoT node running an **OCI-based appliance image**
-(`ostree-unverified-registry:localhost/inferno-appliance:v8`) rather than a traditional
-OSTree deployment. This affects the update mechanism.
+The UI calls `GET /bootc-status` every 10 seconds. The sidecar caches the result for 5 seconds
+(to avoid hammering `bootc status` during rapid polling). Response:
 
-### OCI vs traditional OSTree
-
-| | Traditional OSTree | OCI-based (Inferno Appliance) |
-|-|--------------------|-------------------------------|
-| Update via | `ostree static-delta apply-offline` | `rpm-ostree rebase ostree-unverified-registry:...` |
-| Bundle format | `.iotupdate` tar (delta + version.json) | Container image pushed to registry |
-| Apply script | `apply-update.sh` as-is | Needs `rpm-ostree rebase <new-image-ref>` |
-| Cockpit page | `/usr/share/cockpit/iot-updater/` | `~/.local/share/cockpit/iot-updater/` (usr is read-only) |
-
-### Adapting `apply-update.sh` for OCI images
-
-Replace the `ostree static-delta apply-offline` + `rpm-ostree deploy` block with:
-```bash
-# Extract the new image reference from version.json
-OCI_REF=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print(d['oci_ref'])")
-
-# Rebase to the new OCI image
-rpm-ostree rebase "$OCI_REF"
-```
-
-And add `oci_ref` to `version.json` in `make-bundle.sh`:
 ```json
 {
-  "version": "43.1.2",
-  "oci_ref": "ostree-unverified-registry:registry.example.com/inferno-appliance:v9",
-  ...
+  "booted":   { "image": "localhost/inferno-appliance:v8", "digest": "sha256:…", "version": "v8", "timestamp": "…" },
+  "staged":   null,
+  "rollback": { "image": "localhost/inferno-appliance:v7", "digest": "sha256:…", "version": "v7", "timestamp": "…" }
 }
 ```
 
-### Cockpit page installation on read-only `/usr`
-
-When `/usr/share/cockpit/` is read-only (OCI images, rpm-ostree managed):
-- **User-local (development):** `~/.local/share/cockpit/iot-updater/` — works for the logged-in user
-- **System-wide (production):** embed the page in the OCI image itself, or install via `rpm-ostree install cockpit-iot-updater` once packaged as an RPM
-
-The `install.sh` script uses the user-local path automatically when `/usr/share/cockpit/`
-is not writable.
+The rollback UI section is hidden until `rollback` is non-null.
 
 ---
 
-## Extending the project
+## SELinux note
 
-### Adding authentication to the sidecar
+Files in `/var/lib/` get SELinux context `var_lib_t`. systemd `ExecStart=` cannot directly exec
+them (exits with status 203/EXEC). The apply service uses:
 
-Currently the sidecar trusts any request from localhost. To add a shared secret:
-
-1. Generate a token at sidecar startup and write it to `/run/iot-updater.token`
-2. Cockpit page reads the token via `cockpit.file('/run/iot-updater.token').read()`
-3. Page sends `Authorization: Bearer <token>` on every request
-4. Sidecar validates it in `do_OPTIONS`/`do_POST`/`do_GET`
-
-### Packaging as an RPM
-
-The correct long-term approach for Fedora IoT:
-1. Create an RPM spec at `packaging/cockpit-iot-updater.spec`
-2. Include the Cockpit page in `/usr/share/cockpit/iot-updater/`
-3. Include systemd units in `/usr/lib/systemd/system/`
-4. Include scripts in `/usr/lib/iot-updater/`
-5. `rpm-ostree install cockpit-iot-updater` survives future OS updates
-
-### Adding rollback support
-
-`apply-update.sh` could be extended with a `--rollback` flag:
-```bash
-rpm-ostree rollback
-sleep 2
-systemctl reboot
+```ini
+ExecStart=/usr/bin/bash /var/lib/iot-updater/apply-update.sh
 ```
-The Cockpit page could trigger this via a separate `POST /rollback` endpoint on the sidecar.
+
+Binaries that must be exec'd directly should live in `/usr/local/bin/` (`bin_t`).
