@@ -125,46 +125,70 @@ def verify_bundle_hash(bundle_path: Path, version_info: dict) -> tuple[bool, str
         return False, f"Hash verification error: {e}"
 
 
+def _parse_slot(slot):
+    if not slot:
+        return None
+    img = slot.get("image", {})
+    return {
+        "image":     img.get("image", {}).get("image", ""),
+        "digest":    img.get("imageDigest", ""),
+        "version":   img.get("version", ""),
+        "timestamp": img.get("timestamp", ""),
+    }
+
+
+def _run_bootc_status():
+    """Run bootc status subprocess and update the cache. Called with lock held."""
+    now = time.time()
+    try:
+        result = subprocess.run(
+            ["/usr/bin/bootc", "status", "--format", "json"],
+            capture_output=True, text=True, timeout=8
+        )
+        raw = json.loads(result.stdout)
+        status = raw.get("status", {})
+        data = {
+            "booted":   _parse_slot(status.get("booted")),
+            "staged":   _parse_slot(status.get("staged")),
+            "rollback": _parse_slot(status.get("rollback")),
+        }
+    except Exception as e:
+        # Preserve stale cache on error rather than replacing with error dict
+        if _bootc_cache["data"]:
+            return
+        data = {"error": str(e), "booted": None, "staged": None, "rollback": None}
+    _bootc_cache["data"] = data
+    _bootc_cache["ts"]   = now
+
+
 def get_bootc_status(force: bool = False) -> dict:
     """
-    Run 'bootc status --format json' and return a simplified dict.
-    Cached for 5 seconds to avoid hammering the system.
+    Return bootc status dict. Cached for 10 seconds.
+    Uses non-blocking lock acquisition: if bootc is already running in another
+    thread, returns stale cached data immediately rather than blocking.
     """
-    with _bootc_lock:
+    now = time.time()
+    # Fast path: return cache if still fresh
+    if not force and _bootc_cache["data"] and (now - _bootc_cache["ts"]) < 10:
+        return _bootc_cache["data"]
+
+    # Try to acquire lock without blocking; if another thread is already running
+    # bootc, return whatever cached data we have.
+    acquired = _bootc_lock.acquire(blocking=False)
+    if not acquired:
+        return _bootc_cache["data"] or {
+            "error": "bootc query in progress", "booted": None,
+            "staged": None, "rollback": None
+        }
+    try:
+        # Re-check cache now that we hold the lock
         now = time.time()
-        if not force and _bootc_cache["data"] and (now - _bootc_cache["ts"]) < 5:
+        if not force and _bootc_cache["data"] and (now - _bootc_cache["ts"]) < 10:
             return _bootc_cache["data"]
-
-        try:
-            result = subprocess.run(
-                ["bootc", "status", "--format", "json"],
-                capture_output=True, text=True, timeout=10
-            )
-            raw = json.loads(result.stdout)
-            status = raw.get("status", {})
-
-            def parse_slot(slot):
-                if not slot:
-                    return None
-                img = slot.get("image", {})
-                return {
-                    "image":     img.get("image", {}).get("image", ""),
-                    "digest":    img.get("imageDigest", ""),
-                    "version":   img.get("version", ""),
-                    "timestamp": img.get("timestamp", ""),
-                }
-
-            data = {
-                "booted":   parse_slot(status.get("booted")),
-                "staged":   parse_slot(status.get("staged")),
-                "rollback": parse_slot(status.get("rollback")),
-            }
-        except Exception as e:
-            data = {"error": str(e), "booted": None, "staged": None, "rollback": None}
-
-        _bootc_cache["data"] = data
-        _bootc_cache["ts"]   = now
-        return data
+        _run_bootc_status()
+        return _bootc_cache["data"]
+    finally:
+        _bootc_lock.release()
 
 
 def trigger_apply(version_info: dict):
@@ -201,6 +225,8 @@ def do_rollback():
 
 
 class UpdateHandler(http.server.BaseHTTPRequestHandler):
+    timeout = 30  # kill stalled connections after 30s (inherits to socket timeout)
+
     def log_message(self, fmt, *args):
         print(f"[sidecar] {self.address_string()} - {fmt % args}")
 
@@ -360,7 +386,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    server = http.server.HTTPServer((LISTEN_HOST, LISTEN_PORT), UpdateHandler)
+    server = http.server.ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), UpdateHandler)
     print(f"[iot-updater] Listening on {LISTEN_HOST}:{LISTEN_PORT}")
     server.serve_forever()
 
