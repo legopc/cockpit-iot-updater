@@ -44,9 +44,24 @@ install -m 755 "$SCRIPT_DIR/sidecar/server.py" "$LIB_DIR/server.py"
 install -m 755 "$SCRIPT_DIR/scripts/apply-update.sh" "$LIB_DIR/apply-update.sh"
 
 echo "[3/5] Installing Cockpit page…"
-install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$COCKPIT_DIR/manifest.json"
-install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$COCKPIT_DIR/index.html"
-install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$COCKPIT_DIR/update.js"
+# On OCI-based Fedora IoT, /usr/share/cockpit is read-only.
+# Fall back to user-local path which Cockpit also scans.
+if touch /usr/share/cockpit/.writetest 2>/dev/null; then
+    rm -f /usr/share/cockpit/.writetest
+    install -d -m 755 "$COCKPIT_DIR"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$COCKPIT_DIR/manifest.json"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$COCKPIT_DIR/index.html"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$COCKPIT_DIR/update.js"
+    echo "   Installed to $COCKPIT_DIR (system-wide)"
+else
+    USER_COCKPIT="${HOME}/.local/share/cockpit/iot-updater"
+    mkdir -p "$USER_COCKPIT"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$USER_COCKPIT/manifest.json"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$USER_COCKPIT/index.html"
+    install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$USER_COCKPIT/update.js"
+    echo "   /usr/share/cockpit is read-only (OCI image) — installed to $USER_COCKPIT"
+    echo "   Page will be visible when logged into Cockpit as: $(whoami)"
+fi
 
 echo "[4/5] Installing systemd units…"
 install -m 644 "$SCRIPT_DIR/systemd/iot-updater.service" /etc/systemd/system/iot-updater.service

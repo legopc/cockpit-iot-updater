@@ -232,6 +232,52 @@ updates it to `applied` (or `error`) upon completion.
 
 ---
 
+## OCI-based deployment (Inferno Appliance images)
+
+This project was tested on a Fedora IoT node running an **OCI-based appliance image**
+(`ostree-unverified-registry:localhost/inferno-appliance:v8`) rather than a traditional
+OSTree deployment. This affects the update mechanism.
+
+### OCI vs traditional OSTree
+
+| | Traditional OSTree | OCI-based (Inferno Appliance) |
+|-|--------------------|-------------------------------|
+| Update via | `ostree static-delta apply-offline` | `rpm-ostree rebase ostree-unverified-registry:...` |
+| Bundle format | `.iotupdate` tar (delta + version.json) | Container image pushed to registry |
+| Apply script | `apply-update.sh` as-is | Needs `rpm-ostree rebase <new-image-ref>` |
+| Cockpit page | `/usr/share/cockpit/iot-updater/` | `~/.local/share/cockpit/iot-updater/` (usr is read-only) |
+
+### Adapting `apply-update.sh` for OCI images
+
+Replace the `ostree static-delta apply-offline` + `rpm-ostree deploy` block with:
+```bash
+# Extract the new image reference from version.json
+OCI_REF=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print(d['oci_ref'])")
+
+# Rebase to the new OCI image
+rpm-ostree rebase "$OCI_REF"
+```
+
+And add `oci_ref` to `version.json` in `make-bundle.sh`:
+```json
+{
+  "version": "43.1.2",
+  "oci_ref": "ostree-unverified-registry:registry.example.com/inferno-appliance:v9",
+  ...
+}
+```
+
+### Cockpit page installation on read-only `/usr`
+
+When `/usr/share/cockpit/` is read-only (OCI images, rpm-ostree managed):
+- **User-local (development):** `~/.local/share/cockpit/iot-updater/` — works for the logged-in user
+- **System-wide (production):** embed the page in the OCI image itself, or install via `rpm-ostree install cockpit-iot-updater` once packaged as an RPM
+
+The `install.sh` script uses the user-local path automatically when `/usr/share/cockpit/`
+is not writable.
+
+---
+
 ## Extending the project
 
 ### Adding authentication to the sidecar
