@@ -74,6 +74,11 @@ elif [[ -n "$ARCHIVE" ]]; then
     cp "$ARCHIVE" "$IMAGE_TAR"
 fi
 
+# ── Compute SHA256 of image.tar ───────────────────────────────────────────────
+echo "Computing SHA256 of image archive…"
+IMAGE_SHA256=$(sha256sum "${IMAGE_TAR}" | awk '{print $1}')
+echo "  sha256: ${IMAGE_SHA256}"
+
 # ── Write version.json ────────────────────────────────────────────────────────
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -84,7 +89,8 @@ data = {
     "build_date": "${BUILD_DATE}",
     "description": "${DESCRIPTION}",
     "oci_image_name": "${IMAGE_NAME}",
-    "oci_image_file": "image.tar"
+    "oci_image_file": "image.tar",
+    "image_sha256": "${IMAGE_SHA256}"
 }
 with open("${WORK_DIR}/version.json", "w") as f:
     json.dump(data, f, indent=2)

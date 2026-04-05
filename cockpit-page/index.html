@@ -34,6 +34,35 @@
     }
     .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 16px; }
 
+    /* Deployment info table */
+    .deploy-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .deploy-table td { padding: 4px 8px; vertical-align: top; }
+    .deploy-table td:first-child { font-weight: 600; width: 140px; color: #6a6e73; }
+
+    /* Staged banner */
+    #staged-banner {
+      display: none;
+      background: #fff3e0;
+      border: 1px solid #f0ab00;
+      border-radius: 4px;
+      padding: 10px 16px;
+      margin-top: 12px;
+      font-size: 0.9rem;
+      color: #8a6900;
+    }
+
+    /* Rollback section */
+    #rollback-section {
+      display: none;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #d2d2d2;
+    }
+    #rollback-section h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 10px; color: #6a6e73; }
+    .rollback-info { font-size: 0.9rem; margin-bottom: 12px; }
+    .rollback-info strong { display: block; margin-bottom: 4px; }
+
+    /* Drop zone */
     #drop-zone {
       border: 2px dashed #06c;
       border-radius: 6px;
@@ -47,6 +76,7 @@
     #drop-zone p { color: #6a6e73; margin-top: 8px; font-size: 0.9rem; }
     #file-input { display: none; }
 
+    /* Version preview */
     #version-preview {
       display: none;
       background: #f9f9f9;
@@ -55,10 +85,13 @@
       padding: 16px;
       margin-top: 16px;
     }
+    #version-preview strong { display: block; margin-bottom: 8px; }
     #version-preview table { width: 100%; border-collapse: collapse; }
     #version-preview td { padding: 4px 8px; vertical-align: top; }
     #version-preview td:first-child { font-weight: 600; width: 130px; color: #6a6e73; font-size: 0.9rem; }
+    .hash-display { font-family: monospace; font-size: 0.85rem; color: #444; }
 
+    /* Downgrade warning */
     #downgrade-warning {
       display: none;
       background: #fff3e0;
@@ -70,6 +103,7 @@
     }
     #downgrade-warning label { display: flex; align-items: center; gap: 8px; margin-top: 8px; cursor: pointer; }
 
+    /* Progress */
     #progress-area { display: none; margin-top: 12px; }
     .progress-bar-wrap {
       height: 12px;
@@ -81,6 +115,7 @@
     .progress-bar-fill { height: 100%; background: #06c; width: 0%; transition: width 0.3s; }
     #progress-label { font-size: 0.85rem; color: #6a6e73; }
 
+    /* Status badge */
     #status-badge {
       display: inline-block;
       padding: 4px 12px;
@@ -89,12 +124,14 @@
       font-weight: 600;
       margin-bottom: 16px;
     }
-    .badge-idle     { background: #f0f0f0; color: #6a6e73; }
-    .badge-uploading{ background: #e7f2fa; color: #06c; }
-    .badge-applying { background: #fff3e0; color: #8a6900; }
-    .badge-rebooting{ background: #f3f3f3; color: #151515; }
-    .badge-error    { background: #fde8e8; color: #c9190b; }
+    .badge-idle      { background: #f0f0f0; color: #6a6e73; }
+    .badge-uploading { background: #e7f2fa; color: #06c; }
+    .badge-verifying { background: #e7f2fa; color: #004e8c; }
+    .badge-applying  { background: #fff3e0; color: #8a6900; }
+    .badge-rebooting { background: #f3f3f3; color: #151515; }
+    .badge-error     { background: #fde8e8; color: #c9190b; }
 
+    /* Buttons */
     .btn {
       padding: 8px 20px;
       border-radius: 4px;
@@ -106,8 +143,11 @@
     .btn-primary { background: #06c; color: #fff; border-color: #06c; }
     .btn-primary:disabled { background: #a8c9e8; border-color: #a8c9e8; cursor: not-allowed; }
     .btn-ghost   { background: transparent; color: #06c; border-color: #06c; }
+    .btn-danger  { background: #c9190b; color: #fff; border-color: #c9190b; }
+    .btn-danger:disabled { background: #e8a09a; border-color: #e8a09a; cursor: not-allowed; }
     .btn + .btn  { margin-left: 10px; }
 
+    /* History table */
     #history-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
     #history-table th {
       text-align: left; padding: 8px 10px;
@@ -124,6 +164,7 @@
     .pill-error    { background: #fde8e8; color: #c9190b; }
     .pill-dry_run  { background: #e7f2fa; color: #06c; }
 
+    /* Sidecar warning */
     #sidecar-warn {
       display: none;
       background: #fde8e8; border: 1px solid #c9190b;
@@ -145,11 +186,39 @@
 
 <div class="content">
 
+  <!-- Current Deployment -->
   <div class="card">
     <h2>Current Deployment</h2>
-    <div id="current-info" style="color:#6a6e73;font-size:0.9rem;">Loading…</div>
+    <div id="current-info">
+      <table class="deploy-table">
+        <tr><td>Image</td><td id="di-image" style="color:#6a6e73">Loading…</td></tr>
+        <tr><td>Version</td><td id="di-version">—</td></tr>
+        <tr><td>Built</td><td id="di-timestamp">—</td></tr>
+        <tr><td>Digest</td><td id="di-digest" class="hash-display">—</td></tr>
+      </table>
+    </div>
+
+    <!-- Staged reboot pending banner -->
+    <div id="staged-banner">
+      ⏳ <strong>Reboot pending</strong> — a staged update is waiting to be applied on next boot.
+      Staged: <span id="staged-image">unknown</span>
+    </div>
+
+    <!-- Rollback section — shown only when a previous deployment exists -->
+    <div id="rollback-section">
+      <h3>Available Rollback</h3>
+      <div class="rollback-info">
+        <strong id="rb-image">—</strong>
+        <span style="color:#6a6e73;font-size:0.85rem">
+          Version: <span id="rb-version">—</span> &nbsp;|&nbsp;
+          Digest: <span id="rb-digest" class="hash-display">—</span>
+        </span>
+      </div>
+      <button class="btn btn-danger" id="btn-rollback">⏎ Rollback and Reboot</button>
+    </div>
   </div>
 
+  <!-- Apply Update -->
   <div class="card">
     <h2>Apply Update</h2>
 
@@ -165,7 +234,7 @@
         <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
       </svg>
       <strong id="dz-title">Drop .iotupdate file here</strong>
-      <p id="dz-sub">or click to browse — bundle generated with <code>make-bundle.sh</code></p>
+      <p id="dz-sub">or click to browse</p>
     </div>
 
     <div id="version-preview">
@@ -175,12 +244,16 @@
         <tr><td>Build date</td><td id="pv-date">—</td></tr>
         <tr><td>Description</td><td id="pv-desc">—</td></tr>
         <tr><td>Type</td><td id="pv-type">—</td></tr>
+        <tr id="pv-hash-row" style="display:none">
+          <td>SHA256</td>
+          <td id="pv-hash" class="hash-display" title="">—</td>
+        </tr>
       </table>
     </div>
 
     <div id="downgrade-warning">
       ⚠️ <strong>This appears to be a downgrade or re-apply.</strong>
-      The bundle version is not newer than the currently applied version.
+      The bundle version is not newer than the currently deployed version.
       <label>
         <input type="checkbox" id="allow-downgrade">
         I understand and want to apply anyway
@@ -192,7 +265,7 @@
       <div id="progress-label">0%</div>
     </div>
 
-    <div id="error-msg" style="display:none;color:#c9190b;margin-top:12px;font-size:0.9rem;"></div>
+    <div id="error-msg" style="display:none;color:#c9190b;margin-top:12px;font-size:0.9rem;white-space:pre-wrap;"></div>
 
     <div style="margin-top:16px">
       <button class="btn btn-primary" id="btn-apply" disabled>Apply Update</button>
@@ -200,6 +273,7 @@
     </div>
   </div>
 
+  <!-- Update History -->
   <div class="card">
     <h2>Update History</h2>
     <div id="history-loading" style="color:#6a6e73;font-size:0.9rem;">Loading…</div>

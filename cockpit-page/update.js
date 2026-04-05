@@ -1,24 +1,26 @@
 /* update.js — Cockpit IoT Updater page logic
  *
  * All sidecar calls go through cockpit.http() which routes via the Cockpit
- * bridge WebSocket, bypassing browser CSP and mixed-content restrictions.
+ * bridge WebSocket — already TLS-encrypted by Cockpit (port 9090).
+ * The sidecar binds to 127.0.0.1:8088 and is never exposed directly.
  */
 
 const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB per chunk
 
-// Two clients: text mode for JSON API, binary mode for upload chunks
-const api = cockpit.http(8088);
+const api       = cockpit.http(8088);
 const uploadApi = cockpit.http(8088, { binary: true });
 
-let selectedFile = null;
-let versionPreview = null;
-let currentVersion = null;
-let statusPoller = null;
-let sidecarOk = false;
+let selectedFile     = null;
+let versionPreview   = null;
+let currentVersion   = null;
+let statusPoller     = null;
+let bootcPoller      = null;
+let sidecarOk        = false;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", function() {
     pollStatus();
+    pollBootcStatus();
     loadHistory();
 
     setupDropZone();
@@ -30,6 +32,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     document.getElementById("btn-apply").addEventListener("click", applyUpdate);
     document.getElementById("btn-cancel").addEventListener("click", cancelUpload);
+    document.getElementById("btn-rollback").addEventListener("click", doRollback);
     document.getElementById("allow-downgrade").addEventListener("change", function() {
         var applyBtn = document.getElementById("btn-apply");
         if (versionPreview) {
@@ -38,7 +41,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 });
 
-// ── Status polling ────────────────────────────────────────────────────────────
+// ── Status polling (sidecar state machine) ────────────────────────────────────
 function pollStatus() {
     api.get("/status")
         .then(function(text) {
@@ -46,9 +49,9 @@ function pollStatus() {
             sidecarOk = true;
             document.getElementById("sidecar-warn").style.display = "none";
             renderStatus(s);
-            // Refresh history after a completed apply
             if (s.stage === "idle" && s.message && s.message.indexOf("applied") !== -1) {
                 loadHistory();
+                pollBootcStatus(true);
             }
         })
         .catch(function() {
@@ -64,7 +67,8 @@ function pollStatus() {
 function renderStatus(s) {
     setBadge(s.stage, stageLabel(s.stage));
 
-    var isActive = ["uploading", "extracting", "queued", "applying", "rebooting"].indexOf(s.stage) !== -1;
+    var activeStages = ["uploading", "extracting", "verifying", "queued", "applying", "rebooting"];
+    var isActive = activeStages.indexOf(s.stage) !== -1;
     var progressArea = document.getElementById("progress-area");
     progressArea.style.display = isActive ? "block" : "none";
     if (isActive) {
@@ -76,7 +80,7 @@ function renderStatus(s) {
     errEl.style.display = s.stage === "error" ? "block" : "none";
     if (s.stage === "error") errEl.textContent = s.message || "An error occurred.";
 
-    var applyBtn = document.getElementById("btn-apply");
+    var applyBtn  = document.getElementById("btn-apply");
     var cancelBtn = document.getElementById("btn-cancel");
 
     if (s.stage === "idle") {
@@ -100,8 +104,14 @@ function renderStatus(s) {
 
 function stageLabel(stage) {
     var labels = {
-        idle: "Idle", uploading: "Uploading…", extracting: "Extracting…",
-        queued: "Queued", applying: "Applying…", rebooting: "Rebooting…", error: "Error"
+        idle:      "Idle",
+        uploading: "Uploading…",
+        extracting:"Extracting…",
+        verifying: "Verifying integrity…",
+        queued:    "Queued",
+        applying:  "Applying…",
+        rebooting: "Rebooting…",
+        error:     "Error"
     };
     return labels[stage] || stage;
 }
@@ -110,11 +120,80 @@ function setBadge(stage, label) {
     var b = document.getElementById("status-badge");
     b.textContent = label;
     var cls = "idle";
-    if (["uploading", "extracting", "queued"].indexOf(stage) !== -1) cls = "uploading";
-    else if (stage === "applying") cls = "applying";
+    if (["uploading", "extracting"].indexOf(stage) !== -1) cls = "uploading";
+    else if (stage === "verifying") cls = "verifying";
+    else if (["queued", "applying"].indexOf(stage) !== -1) cls = "applying";
     else if (stage === "rebooting") cls = "rebooting";
-    else if (stage === "error") cls = "error";
+    else if (stage === "error")     cls = "error";
     b.className = "badge-" + cls;
+}
+
+// ── Bootc status (real deployment info) ───────────────────────────────────────
+function pollBootcStatus(force) {
+    api.get("/bootc-status")
+        .then(function(text) {
+            var bs = JSON.parse(text);
+            renderBootcStatus(bs);
+        })
+        .catch(function() {
+            document.getElementById("di-image").textContent = "Unavailable (sidecar unreachable)";
+        })
+        .always(function() {
+            // Poll every 10s — bootc status is cached 5s on sidecar
+            bootcPoller = setTimeout(pollBootcStatus, 10000);
+        });
+}
+
+function renderBootcStatus(bs) {
+    var booted = bs.booted || {};
+    document.getElementById("di-image").textContent     = booted.image     || "—";
+    document.getElementById("di-version").textContent   = booted.version   || "—";
+    document.getElementById("di-timestamp").textContent = booted.timestamp ? formatTs(booted.timestamp) : "—";
+    document.getElementById("di-digest").textContent    = truncHash(booted.digest);
+    document.getElementById("di-digest").title          = booted.digest || "";
+
+    // Current version for downgrade detection
+    if (booted.image) {
+        var m = booted.image.match(/:(.+)$/);
+        if (m) currentVersion = m[1];
+    }
+
+    // Staged banner
+    var stagedBanner = document.getElementById("staged-banner");
+    if (bs.staged) {
+        document.getElementById("staged-image").textContent = bs.staged.image || "unknown";
+        stagedBanner.style.display = "block";
+    } else {
+        stagedBanner.style.display = "none";
+    }
+
+    // Rollback section
+    var rbSection = document.getElementById("rollback-section");
+    if (bs.rollback) {
+        document.getElementById("rb-image").textContent   = bs.rollback.image   || "—";
+        document.getElementById("rb-version").textContent = bs.rollback.version || "—";
+        document.getElementById("rb-digest").textContent  = truncHash(bs.rollback.digest);
+        document.getElementById("rb-digest").title        = bs.rollback.digest  || "";
+        rbSection.style.display = "block";
+    } else {
+        rbSection.style.display = "none";
+    }
+}
+
+function truncHash(hash) {
+    if (!hash) return "—";
+    // Remove "sha256:" prefix, show first 16 hex chars + "…"
+    var h = hash.replace(/^sha256:/, "");
+    return h.length > 16 ? h.substring(0, 16) + "…" : h;
+}
+
+function formatTs(ts) {
+    // ts is ISO 8601 — format as local date+time
+    try {
+        return new Date(ts).toLocaleString();
+    } catch(e) {
+        return ts;
+    }
 }
 
 // ── Drop zone ─────────────────────────────────────────────────────────────────
@@ -152,19 +231,21 @@ function handleFileSelected(file) {
 function uploadAndPreview(file) {
     var totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-    // Start upload session
     api.request({ method: "POST", path: "/upload/start", body: "" })
         .then(function() {
             document.getElementById("progress-area").style.display = "block";
             return sendChunks(file, totalChunks, 0);
         })
         .then(function() {
-            // Fetch version preview from the status
             return api.get("/status");
         })
         .then(function(text) {
             var s = JSON.parse(text);
             document.getElementById("progress-area").style.display = "none";
+            if (s.stage === "error") {
+                showError(s.error || s.message || "Bundle verification failed.");
+                return;
+            }
             if (s.version_info) {
                 versionPreview = s.version_info;
                 showVersionPreview(versionPreview);
@@ -201,7 +282,12 @@ function sendChunks(file, totalChunks, index) {
                 var text = new TextDecoder().decode(respBytes);
                 var j = JSON.parse(text);
                 var pct = Math.round(((index + 1) / totalChunks) * 100);
-                updateProgress(pct, "Uploading… " + pct + "%");
+                // Show verifying state on last chunk (server streams hash check)
+                if (index + 1 >= totalChunks) {
+                    updateProgress(99, "Verifying bundle integrity…");
+                } else {
+                    updateProgress(pct, "Uploading… " + pct + "%");
+                }
                 resolve();
             })
             .catch(reject);
@@ -214,21 +300,27 @@ function sendChunks(file, totalChunks, index) {
 }
 
 function showVersionPreview(info) {
-    document.getElementById("pv-version").textContent = info.version || "—";
-    document.getElementById("pv-date").textContent = info.build_date || "—";
-    document.getElementById("pv-desc").textContent = info.description || "—";
-    document.getElementById("pv-type").textContent = info.dry_run ? "🧪 Dry run (no actual update)" : "Production";
-    document.getElementById("version-preview").style.display = "block";
+    document.getElementById("pv-version").textContent = info.version    || "—";
+    document.getElementById("pv-date").textContent    = info.build_date || "—";
+    document.getElementById("pv-desc").textContent    = info.description || "—";
+    document.getElementById("pv-type").textContent    = info.dry_run
+        ? "🧪 Dry run (no actual update)" : "Production";
 
-    if (isDowngrade()) {
-        document.getElementById("downgrade-warning").style.display = "block";
-    } else {
-        document.getElementById("downgrade-warning").style.display = "none";
+    // SHA256 display
+    if (info.image_sha256) {
+        var hashRow = document.getElementById("pv-hash-row");
+        var hashEl  = document.getElementById("pv-hash");
+        hashEl.textContent = info.image_sha256.substring(0, 16) + "…";
+        hashEl.title       = info.image_sha256;
+        hashRow.style.display = "";
     }
+
+    document.getElementById("version-preview").style.display = "block";
+    document.getElementById("downgrade-warning").style.display = isDowngrade() ? "block" : "none";
 
     var applyBtn = document.getElementById("btn-apply");
     applyBtn.textContent = "Apply v" + info.version;
-    applyBtn.disabled = isDowngrade() && !document.getElementById("allow-downgrade").checked;
+    applyBtn.disabled    = isDowngrade() && !document.getElementById("allow-downgrade").checked;
 
     document.getElementById("dz-sub").textContent =
         (selectedFile.size / 1024 / 1024).toFixed(1) + " MB — ready to apply";
@@ -240,8 +332,9 @@ function isDowngrade() {
 }
 
 function versionCompare(a, b) {
-    var pa = a.split(".").map(Number);
-    var pb = b.split(".").map(Number);
+    // Handle "v9" style tags by stripping leading "v"
+    var norm = function(s) { return s.replace(/^v/, "").split(".").map(Number); };
+    var pa = norm(a), pb = norm(b);
     for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
         var diff = (pa[i] || 0) - (pb[i] || 0);
         if (diff !== 0) return diff;
@@ -252,7 +345,7 @@ function versionCompare(a, b) {
 // ── Apply / Cancel ────────────────────────────────────────────────────────────
 function applyUpdate() {
     if (!versionPreview) return;
-    var msg = "Apply update v" + versionPreview.version + "?";
+    var msg = "Apply update " + versionPreview.version + "?";
     if (!versionPreview.dry_run) msg += "\n\nThe device will reboot after the update is applied.";
     if (!confirm(msg)) return;
 
@@ -266,12 +359,13 @@ function cancelUpload() {
     api.request({ method: "POST", path: "/upload/cancel", body: "" })
         .then(function() {
             versionPreview = null;
-            selectedFile = null;
-            document.getElementById("version-preview").style.display = "none";
+            selectedFile   = null;
+            document.getElementById("version-preview").style.display  = "none";
             document.getElementById("downgrade-warning").style.display = "none";
+            document.getElementById("pv-hash-row").style.display       = "none";
             document.getElementById("dz-title").textContent = "Drop .iotupdate file here";
-            document.getElementById("dz-sub").textContent = "or click to browse";
-            document.getElementById("btn-apply").disabled = true;
+            document.getElementById("dz-sub").textContent   = "or click to browse";
+            document.getElementById("btn-apply").disabled   = true;
             document.getElementById("btn-apply").textContent = "Apply Update";
             document.getElementById("btn-cancel").style.display = "none";
             document.getElementById("file-input").value = "";
@@ -281,63 +375,66 @@ function cancelUpload() {
         });
 }
 
+// ── Rollback ──────────────────────────────────────────────────────────────────
+function doRollback() {
+    var rbImage = document.getElementById("rb-image").textContent || "previous image";
+    if (!confirm("Roll back to " + rbImage + "?\n\nThe device will reboot immediately.")) return;
+
+    var btn = document.getElementById("btn-rollback");
+    btn.disabled = true;
+    btn.textContent = "Rolling back…";
+
+    api.request({ method: "POST", path: "/rollback", body: "" })
+        .then(function(text) {
+            var r = JSON.parse(text);
+            setBadge("rebooting", "Rolling back…");
+            // Page will become unreachable on reboot — show message
+            document.getElementById("error-msg").style.color = "#1e7e34";
+            showError("Rollback triggered. Device is rebooting to " + (r.rolling_back_to || rbImage) + ".\nReconnect in ~60 seconds.");
+        })
+        .catch(function(err) {
+            btn.disabled = false;
+            btn.textContent = "⏎ Rollback and Reboot";
+            showError("Rollback failed: " + (err.message || err.problem || String(err)));
+        });
+}
+
 // ── History ───────────────────────────────────────────────────────────────────
 function loadHistory() {
     api.get("/history")
         .then(function(text) {
             var history = JSON.parse(text);
             renderHistory(history);
-
-            // Update current version from history
-            var applied = history.filter(function(h) { return h.status === "applied" || h.status === "dry_run"; });
-            if (applied.length > 0) {
-                var last = applied[applied.length - 1];
-                currentVersion = last.version;
-                renderCurrentDeployment(last);
-            } else {
-                document.getElementById("current-info").textContent = "No updates applied via this tool yet.";
-            }
         })
         .catch(function() {
             document.getElementById("history-loading").style.display = "none";
-            document.getElementById("history-empty").style.display = "block";
-            document.getElementById("history-empty").textContent = "Could not load history (sidecar unreachable).";
-            document.getElementById("current-info").textContent = "Sidecar unreachable.";
+            document.getElementById("history-empty").style.display   = "block";
+            document.getElementById("history-empty").textContent = "Could not load history.";
         });
-}
-
-function renderCurrentDeployment(last) {
-    var el = document.getElementById("current-info");
-    el.innerHTML =
-        '<table style="border-collapse:collapse;font-size:0.9rem">' +
-        '<tr><td style="padding:3px 8px;color:#6a6e73;font-weight:600">Version</td>' +
-        '<td style="padding:3px 8px">' + esc(last.version) + '</td></tr>' +
-        '<tr><td style="padding:3px 8px;color:#6a6e73;font-weight:600">Applied</td>' +
-        '<td style="padding:3px 8px">' + esc(last.applied_at_complete || last.applied_at || "—") + '</td></tr>' +
-        '</table>';
 }
 
 function renderHistory(history) {
     document.getElementById("history-loading").style.display = "none";
-    var tbl = document.getElementById("history-table");
+    var tbl   = document.getElementById("history-table");
     var empty = document.getElementById("history-empty");
 
     if (!history || history.length === 0) {
-        tbl.style.display = "none";
+        tbl.style.display   = "none";
         empty.style.display = "block";
         return;
     }
-    tbl.style.display = "table";
+    tbl.style.display   = "table";
     empty.style.display = "none";
 
     var rows = [];
-    var rev = history.slice().reverse();
+    var rev  = history.slice().reverse();
     for (var i = 0; i < rev.length; i++) {
         var h = rev[i];
         var pillClass = "pill-" + (h.status || "applying").replace(/[^a-z_]/g, "");
+        var sha = h.sha256 ? ('<span class="hash-display" title="' + esc(h.sha256) + '">' + h.sha256.substring(0,16) + "…</span>") : "";
         rows.push(
             "<tr>" +
-            "<td><strong>" + esc(h.version) + "</strong></td>" +
+            "<td><strong>" + esc(h.version) + "</strong>" + (sha ? "<br><small>sha256: " + sha + "</small>" : "") + "</td>" +
             "<td>" + esc(h.applied_at_complete || h.applied_at || "—") + "</td>" +
             "<td>" + esc(h.description || "—") + "</td>" +
             "<td><span class='status-pill " + pillClass + "'>" + esc(h.status) + "</span></td>" +
@@ -355,12 +452,14 @@ function updateProgress(pct, label) {
 
 function showError(msg) {
     var el = document.getElementById("error-msg");
-    el.textContent = msg;
+    el.textContent  = msg;
     el.style.display = "block";
 }
 
 function clearError() {
-    document.getElementById("error-msg").style.display = "none";
+    var el = document.getElementById("error-msg");
+    el.style.display = "none";
+    el.style.color   = "#c9190b";
 }
 
 function esc(s) {

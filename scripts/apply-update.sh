@@ -108,9 +108,22 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
     [[ -f "$OCI_TAR_PATH" ]] || fail "Extracted OCI archive not found at ${OCI_TAR_PATH}"
 
     # Load OCI image into local container storage
+    write_status "applying" 45 "Verifying image integrity (sha256)…"
+    EXPECTED_SHA256=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print(d.get('image_sha256',''))" 2>/dev/null || echo "")
+    if [[ -n "$EXPECTED_SHA256" ]]; then
+        echo "[apply-update] Verifying sha256 of image.tar…"
+        ACTUAL_SHA256=$(sha256sum "${OCI_TAR_PATH}" | awk '{print $1}')
+        if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+            fail "SHA256 mismatch: bundle may be corrupt.\n  expected: ${EXPECTED_SHA256}\n  actual:   ${ACTUAL_SHA256}"
+        fi
+        echo "[apply-update] sha256 OK: ${ACTUAL_SHA256}"
+    else
+        echo "[apply-update] WARNING: No image_sha256 in version.json — skipping integrity check"
+    fi
+
+    # Load OCI image into local container storage
     write_status "applying" 50 "Loading OCI image into container storage…"
     echo "[apply-update] Loading ${IMAGE_NAME} via skopeo…"
-    skopeo copy \
         "oci-archive:${OCI_TAR_PATH}" \
         "containers-storage:${IMAGE_NAME}" \
         || fail "skopeo copy failed — check image archive integrity"
