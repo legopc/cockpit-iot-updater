@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# install.sh — install cockpit-iot-updater on a Fedora IoT 43 device
+# Run as root on the target device.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/legopc/cockpit-iot-updater/main/install.sh | sudo bash
+#   -- or --
+#   sudo ./install.sh
+
+set -euo pipefail
+
+REPO_URL="https://github.com/legopc/cockpit-iot-updater"
+LIB_DIR="/var/lib/iot-updater"
+COCKPIT_DIR="/usr/share/cockpit/iot-updater"
+
+echo "════════════════════════════════════════════════════"
+echo "  cockpit-iot-updater installer"
+echo "  Target: Fedora IoT 43 (rpm-ostree managed)"
+echo "════════════════════════════════════════════════════"
+echo ""
+
+[[ $EUID -eq 0 ]] || { echo "ERROR: Run as root (sudo)"; exit 1; }
+
+# Check required tools
+for cmd in ostree rpm-ostree systemctl python3 tar; do
+    command -v "$cmd" > /dev/null 2>&1 || { echo "ERROR: '$cmd' not found"; exit 1; }
+done
+
+command -v cockpit-bridge > /dev/null 2>&1 \
+    || { echo "WARNING: cockpit-bridge not found. Install cockpit first:"; \
+         echo "  rpm-ostree install cockpit"; \
+         echo "  systemctl reboot"; exit 1; }
+
+# Find script directory (works whether run from clone or via curl)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "[1/5] Creating directories…"
+mkdir -p "$LIB_DIR"
+mkdir -p "$COCKPIT_DIR"
+mkdir -p /var/lib/iot-updater
+
+echo "[2/5] Installing sidecar server…"
+install -m 755 "$SCRIPT_DIR/sidecar/server.py" "$LIB_DIR/server.py"
+install -m 755 "$SCRIPT_DIR/scripts/apply-update.sh" "$LIB_DIR/apply-update.sh"
+
+echo "[3/5] Installing Cockpit page…"
+install -m 644 "$SCRIPT_DIR/cockpit-page/manifest.json" "$COCKPIT_DIR/manifest.json"
+install -m 644 "$SCRIPT_DIR/cockpit-page/index.html"    "$COCKPIT_DIR/index.html"
+install -m 644 "$SCRIPT_DIR/cockpit-page/update.js"     "$COCKPIT_DIR/update.js"
+
+echo "[4/5] Installing systemd units…"
+install -m 644 "$SCRIPT_DIR/systemd/iot-updater.service" /etc/systemd/system/iot-updater.service
+install -m 644 "$SCRIPT_DIR/systemd/iot-update.service"  /etc/systemd/system/iot-update.service
+systemctl daemon-reload
+
+echo "[5/5] Enabling and starting iot-updater.service…"
+systemctl enable --now iot-updater.service
+
+echo ""
+echo "✓ Installation complete!"
+echo ""
+echo "  Sidecar:      http://127.0.0.1:8088 (via iot-updater.service)"
+echo "  Cockpit page: https://<device-ip>:9090  →  IoT Updater (sidebar)"
+echo ""
+echo "  If cockpit is not running:"
+echo "    systemctl enable --now cockpit.socket"
+echo ""
+echo "  To verify:"
+echo "    systemctl status iot-updater.service"
+echo "    curl http://127.0.0.1:8088/status"

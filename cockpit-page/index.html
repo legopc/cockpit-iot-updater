@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IoT Updater</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: RedHatText, 'Red Hat Text', Helvetica, sans-serif;
+      background: #f0f0f0;
+      color: #151515;
+      min-height: 100vh;
+    }
+
+    .pf-page-header {
+      background: #151515;
+      color: #fff;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .pf-page-header h1 { font-size: 1.25rem; font-weight: 600; }
+
+    .tabs {
+      display: flex;
+      background: #fff;
+      border-bottom: 2px solid #d2d2d2;
+      padding: 0 24px;
+    }
+    .tab-btn {
+      padding: 12px 20px;
+      border: none;
+      background: none;
+      font-size: 1rem;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -2px;
+      color: #6a6e73;
+    }
+    .tab-btn.active {
+      color: #06c;
+      border-bottom-color: #06c;
+      font-weight: 600;
+    }
+
+    .tab-panel { display: none; padding: 24px; max-width: 780px; margin: 0 auto; }
+    .tab-panel.active { display: block; }
+
+    .card {
+      background: #fff;
+      border: 1px solid #d2d2d2;
+      border-radius: 4px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 16px; }
+
+    /* Drop zone */
+    #drop-zone {
+      border: 2px dashed #06c;
+      border-radius: 6px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #drop-zone.dragover { background: #e7f2fa; }
+    #drop-zone p { color: #6a6e73; margin-top: 8px; font-size: 0.9rem; }
+    #file-input { display: none; }
+
+    /* Version preview */
+    #version-preview {
+      display: none;
+      background: #f9f9f9;
+      border: 1px solid #d2d2d2;
+      border-radius: 4px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    #version-preview table { width: 100%; border-collapse: collapse; }
+    #version-preview td { padding: 4px 8px; vertical-align: top; }
+    #version-preview td:first-child { font-weight: 600; width: 140px; color: #6a6e73; font-size: 0.9rem; }
+
+    /* Downgrade warning */
+    #downgrade-warning {
+      display: none;
+      background: #fff3e0;
+      border: 1px solid #f0ab00;
+      border-radius: 4px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      font-size: 0.9rem;
+    }
+    #downgrade-warning label { display: flex; align-items: center; gap: 8px; margin-top: 8px; cursor: pointer; }
+
+    /* Progress */
+    #progress-area { display: none; margin-bottom: 16px; }
+    .progress-bar-wrap {
+      height: 12px;
+      background: #d2d2d2;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: #06c;
+      width: 0%;
+      transition: width 0.3s;
+    }
+    #progress-label { font-size: 0.85rem; color: #6a6e73; }
+
+    /* Status badge */
+    #status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .badge-idle     { background: #f0f0f0; color: #6a6e73; }
+    .badge-uploading{ background: #e7f2fa; color: #06c; }
+    .badge-applying { background: #fff3e0; color: #8a6900; }
+    .badge-rebooting{ background: #f3f3f3; color: #151515; }
+    .badge-error    { background: #fde8e8; color: #c9190b; }
+
+    /* Buttons */
+    .btn {
+      padding: 8px 20px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      font-size: 0.95rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-primary { background: #06c; color: #fff; border-color: #06c; }
+    .btn-primary:disabled { background: #a8c9e8; border-color: #a8c9e8; cursor: not-allowed; }
+    .btn-danger  { background: #c9190b; color: #fff; border-color: #c9190b; }
+    .btn-ghost   { background: transparent; color: #06c; border-color: #06c; }
+    .btn + .btn  { margin-left: 10px; }
+
+    /* History table */
+    #history-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    #history-table th {
+      text-align: left;
+      padding: 8px 10px;
+      background: #f0f0f0;
+      border-bottom: 2px solid #d2d2d2;
+      font-weight: 600;
+    }
+    #history-table td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; }
+    #history-table tr:last-child td { border-bottom: none; }
+    .status-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .pill-applied   { background: #d6f2d0; color: #1e7e34; }
+    .pill-applying  { background: #fff3e0; color: #8a6900; }
+    .pill-error     { background: #fde8e8; color: #c9190b; }
+    .pill-rolledback{ background: #f0f0f0; color: #6a6e73; }
+    .mono { font-family: 'Courier New', monospace; font-size: 0.8rem; }
+
+    #history-empty { color: #6a6e73; font-size: 0.9rem; padding: 20px 0; }
+  </style>
+</head>
+<body>
+
+<div class="pf-page-header">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2">
+    <polyline points="16 16 12 12 8 16"></polyline>
+    <line x1="12" y1="12" x2="12" y2="21"></line>
+    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+  </svg>
+  <h1>IoT Updater</h1>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('upload')">Upload Update</button>
+  <button class="tab-btn" onclick="switchTab('history')">Version History</button>
+</div>
+
+<!-- Upload tab -->
+<div id="tab-upload" class="tab-panel active">
+
+  <div class="card">
+    <h2>Current Deployment</h2>
+    <div id="current-info" style="color:#6a6e73;font-size:0.9rem;">Loading…</div>
+  </div>
+
+  <div class="card">
+    <h2>Apply Update</h2>
+
+    <span id="status-badge" class="badge-idle">Idle</span>
+
+    <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <input type="file" id="file-input" accept=".iotupdate">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#06c" stroke-width="1.5">
+        <polyline points="16 16 12 12 8 16"></polyline>
+        <line x1="12" y1="12" x2="12" y2="21"></line>
+        <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"></path>
+      </svg>
+      <strong>Drop .iotupdate file here</strong>
+      <p>or click to browse — bundle must be generated with <code>make-bundle.sh</code></p>
+    </div>
+
+    <div id="version-preview">
+      <strong>Bundle Details</strong>
+      <table>
+        <tr><td>Version</td><td id="pv-version">—</td></tr>
+        <tr><td>Build date</td><td id="pv-date">—</td></tr>
+        <tr><td>Description</td><td id="pv-desc">—</td></tr>
+        <tr><td>From commit</td><td id="pv-from" class="mono">—</td></tr>
+        <tr><td>To commit</td><td id="pv-to" class="mono">—</td></tr>
+      </table>
+    </div>
+
+    <div id="downgrade-warning">
+      ⚠️ <strong>This bundle appears to be a downgrade or re-apply.</strong>
+      The bundle version is not newer than the currently applied version.
+      <label>
+        <input type="checkbox" id="allow-downgrade">
+        I understand and want to apply anyway
+      </label>
+    </div>
+
+    <div id="progress-area">
+      <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-fill"></div></div>
+      <div id="progress-label">0%</div>
+    </div>
+
+    <div id="error-msg" style="display:none;color:#c9190b;margin-bottom:16px;font-size:0.9rem;"></div>
+
+    <button class="btn btn-primary" id="btn-apply" disabled onclick="applyUpdate()">Apply Update</button>
+    <button class="btn btn-ghost" id="btn-cancel" style="display:none" onclick="cancelUpload()">Cancel</button>
+  </div>
+
+</div>
+
+<!-- History tab -->
+<div id="tab-history" class="tab-panel">
+  <div class="card">
+    <h2>Applied Updates</h2>
+    <div id="history-empty" style="display:none">No updates have been applied yet.</div>
+    <table id="history-table" style="display:none">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Applied at</th>
+          <th>Description</th>
+          <th>To Commit</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="update.js"></script>
+</body>
+</html>

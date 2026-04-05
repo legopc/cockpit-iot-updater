@@ -1,0 +1,18 @@
+[Unit]
+Description=Cockpit IoT Updater — sidecar HTTP server (127.0.0.1:8088)
+Documentation=https://github.com/legopc/cockpit-iot-updater
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /var/lib/iot-updater/server.py
+Restart=on-failure
+RestartSec=5
+# Hardened — sidecar only needs /var/tmp and /var/lib/iot-updater
+ProtectSystem=false
+ProtectHome=true
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

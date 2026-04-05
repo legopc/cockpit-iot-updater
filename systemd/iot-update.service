@@ -1,0 +1,21 @@
+[Unit]
+Description=Cockpit IoT Updater — apply OSTree update and reboot
+Documentation=https://github.com/legopc/cockpit-iot-updater
+After=network.target
+# Prevent accidental re-run
+ConditionPathExists=/var/tmp/iot43-update.iotupdate
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/var/lib/iot-updater/apply-update.sh
+# Do not time out — ostree delta apply on a 2GB bundle can take several minutes
+TimeoutStartSec=0
+StandardOutput=journal
+StandardError=journal
+# Must access /var/tmp (where bundle is written)
+PrivateTmp=no
+
+[Install]
+# Not enabled at boot — started on demand by the sidecar
+WantedBy=multi-user.target
