@@ -8,7 +8,7 @@ ConditionPathExists=/var/tmp/iot43-update.iotupdate
 [Service]
 Type=oneshot
 User=root
-ExecStart=/var/lib/iot-updater/apply-update.sh
+ExecStart=/usr/bin/bash /var/lib/iot-updater/apply-update.sh
 # Do not time out — ostree delta apply on a 2GB bundle can take several minutes
 TimeoutStartSec=0
 StandardOutput=journal

@@ -51,6 +51,9 @@ def read_external_status():
             data = json.loads(STATUS_PATH.read_text())
             with _state_lock:
                 _state.update(data)
+                # Clear stale error when the apply script signals idle/success
+                if data.get("stage") == "idle":
+                    _state["error"] = None
     except Exception:
         pass
 
