@@ -21,6 +21,8 @@ IMAGE_NAME_OVERRIDE=""
 VERSION=""
 DESCRIPTION=""
 OUT_FILE=""
+IMAGE_DIGEST=""
+HMAC_KEY=""
 
 usage() {
     echo "Usage: $0 --image IMAGE[:TAG] | --archive /path/to/image.tar"
@@ -33,6 +35,7 @@ usage() {
     echo "  --version    Version string, e.g. v9 (stored in version.json)"
     echo "  --description Human-readable change description"
     echo "  --out        Output .iotupdate file path"
+    echo "  --hmac-key   Secret key for HMAC-SHA256 bundle signing (writes .sig file)"
     exit 1
 }
 
@@ -44,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --version)     VERSION="$2"; shift 2 ;;
         --description) DESCRIPTION="$2"; shift 2 ;;
         --out)         OUT_FILE="$2"; shift 2 ;;
+        --hmac-key)    HMAC_KEY="$2"; shift 2 ;;
         -h|--help)     usage ;;
         *) echo "Unknown argument: $1"; usage ;;
     esac
@@ -82,10 +86,50 @@ if [[ -n "$IMAGE" ]]; then
         exit 1
     }
     echo "  Image exported: $(du -sh "${IMAGE_TAR}" | cut -f1)"
+    # Capture image digest for reproducibility
+    IMAGE_DIGEST=$(podman inspect --format '{{.Digest}}' "${IMAGE}" 2>/dev/null || echo "")
+    if [[ -n "$IMAGE_DIGEST" ]]; then
+        echo "  Digest: ${IMAGE_DIGEST}"
+    fi
+    # Validate tar structure before proceeding
+    echo "Validating image archive structure…"
+    if ! tar -tf "${IMAGE_TAR}" > /dev/null 2>&1; then
+        echo "ERROR: Image archive is not a valid tar — it may be truncated or corrupt"
+        exit 1
+    fi
+    # Detect archive format
+    if tar -tf "${IMAGE_TAR}" index.json > /dev/null 2>&1; then
+        ARCHIVE_FORMAT="oci"
+        echo "  Format: OCI archive (index.json present)"
+    elif tar -tf "${IMAGE_TAR}" manifest.json > /dev/null 2>&1; then
+        ARCHIVE_FORMAT="docker"
+        echo "  Format: Docker archive (manifest.json present)"
+    else
+        echo "WARNING: Archive format unknown — neither index.json nor manifest.json found"
+        ARCHIVE_FORMAT="unknown"
+    fi
 elif [[ -n "$ARCHIVE" ]]; then
     [[ -f "$ARCHIVE" ]] || { echo "ERROR: Archive not found: $ARCHIVE"; exit 1; }
     echo "Using existing archive: $ARCHIVE ($(du -sh "$ARCHIVE" | cut -f1))"
     cp "$ARCHIVE" "$IMAGE_TAR"
+    IMAGE_DIGEST=""
+    # Validate tar structure before proceeding
+    echo "Validating image archive structure…"
+    if ! tar -tf "${IMAGE_TAR}" > /dev/null 2>&1; then
+        echo "ERROR: Image archive is not a valid tar — it may be truncated or corrupt"
+        exit 1
+    fi
+    # Detect archive format
+    if tar -tf "${IMAGE_TAR}" index.json > /dev/null 2>&1; then
+        ARCHIVE_FORMAT="oci"
+        echo "  Format: OCI archive (index.json present)"
+    elif tar -tf "${IMAGE_TAR}" manifest.json > /dev/null 2>&1; then
+        ARCHIVE_FORMAT="docker"
+        echo "  Format: Docker archive (manifest.json present)"
+    else
+        echo "WARNING: Archive format unknown — neither index.json nor manifest.json found"
+        ARCHIVE_FORMAT="unknown"
+    fi
 fi
 
 # ── Compute SHA256 of image.tar ───────────────────────────────────────────────
@@ -104,7 +148,9 @@ data = {
     "description": "${DESCRIPTION}",
     "oci_image_name": "${IMAGE_NAME}",
     "oci_image_file": "image.tar",
-    "image_sha256": "${IMAGE_SHA256}"
+    "image_sha256": "${IMAGE_SHA256}",
+    "archive_format": "${ARCHIVE_FORMAT}",
+    "image_digest": "${IMAGE_DIGEST}"
 }
 with open("${WORK_DIR}/version.json", "w") as f:
     json.dump(data, f, indent=2)
@@ -121,6 +167,22 @@ tar -cf "$ABS_OUT" version.json image.tar
 popd > /dev/null
 
 BUNDLE_SIZE=$(du -sh "$ABS_OUT" | cut -f1)
+
+# Optional HMAC signature
+if [[ -n "$HMAC_KEY" ]]; then
+    SIG_FILE="${ABS_OUT}.sig"
+    echo "${HMAC_KEY}" | openssl dgst -sha256 -hmac "$(cat -)" -binary "$ABS_OUT" \
+        | xxd -p -c 256 > "$SIG_FILE" 2>/dev/null || \
+        python3 -c "
+import hmac, hashlib, sys
+key = '${HMAC_KEY}'.encode()
+data = open('${ABS_OUT}', 'rb').read()
+sig = hmac.new(key, data, hashlib.sha256).hexdigest()
+open('${ABS_OUT}.sig', 'w').write(sig + '\n')
+"
+    echo "  HMAC-SHA256 signature: ${SIG_FILE}"
+fi
+
 echo ""
 echo "✓ Bundle created: ${ABS_OUT} (${BUNDLE_SIZE})"
 echo ""
