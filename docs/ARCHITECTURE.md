@@ -29,7 +29,7 @@
 │  Upload storage: /var/tmp/iot43-update.iotupdate               │
 │  History:        /var/lib/iot-updater/history.json             │
 │  Apply signal:   systemctl start iot-update.service            │
-│  Status file:    /var/lib/iot-updater/status.json              │
+│  Status file:    /run/iot-update-status.json                   │
 └─────────────────────────────────────────────────────────────────┘
          │  systemctl start iot-update.service
          ▼
@@ -65,7 +65,8 @@ WebSocket (already TLS). No HTTPS is needed on the sidecar itself.
 | `/var/lib/iot-updater/server.py` | Sidecar HTTP server |
 | `/var/lib/iot-updater/apply-update.sh` | Update apply script (run as root by iot-update.service) |
 | `/var/lib/iot-updater/history.json` | Persistent update history |
-| `/var/lib/iot-updater/status.json` | Written by apply-update.sh to signal completion |
+| `/var/lib/iot-updater/update.log` | Persistent update process log (Phase B) |
+| `/run/iot-update-status.json` | Written by apply-update.sh to signal stage/progress (ephemeral) |
 | `/var/tmp/iot43-update.iotupdate` | Bundle landing zone (temporary) |
 | `/var/tmp/iot-update-work/` | Working directory during apply (image.tar extracted here) |
 | `/etc/systemd/system/iot-updater.service` | Persistent sidecar unit |
@@ -124,7 +125,7 @@ bundle.iotupdate
         ▼                                                    │
      applying ── apply-update.sh running ────────────────────┤
         │                                                    │
-        │  (apply-update.sh writes status.json → idle)       │
+        │  (apply-update.sh writes {stage: rebooting} to /run/iot-update-status.json)       │
         ▼                                                    │
        idle ◄──────── POST /rollback (also reboot) ──────────┘
         │
@@ -145,6 +146,7 @@ See [SIDECAR-API.md](SIDECAR-API.md) for the full endpoint reference.
 | GET | `/history` | All past update records |
 | GET | `/bootc-status` | `bootc status` JSON — booted/staged/rollback deployments |
 | GET | `/version-preview?file=<path>` | Parse version.json from a staged bundle |
+| GET | `/logs?lines=N` | Tail of update process log |
 | POST | `/upload/start` | Begin upload session (filename, size) |
 | POST | `/upload` | Send one 8 MB chunk |
 | POST | `/upload/apply` | Confirm staged bundle, start apply |
@@ -197,3 +199,49 @@ ExecStart=/usr/bin/bash /var/lib/iot-updater/apply-update.sh
 ```
 
 Binaries that must be exec'd directly should live in `/usr/local/bin/` (`bin_t`).
+
+---
+
+## Rollback gotchas
+
+### What rollback does NOT revert
+
+`bootc rollback --apply` switches back to the previous OCI image on next boot.
+This means:
+
+- **Container image layers** → reverted ✅ (the full OS image)
+- **`/etc` configuration** → **NOT reverted** ❌  
+  Changes made to `/etc` (config files, systemd units, SSH keys) by the new image's
+  firstboot scripts persist after rollback. If a new image wrote `/etc/myconfig.conf`,
+  it remains after rolling back.
+- **`/var` data** → **NOT reverted** ❌  
+  `/var` is a persistent overlay in Fedora IoT. Databases, logs, and application data
+  in `/var` are shared across all bootc deployments.
+- **`history.json`** → persists across rollback (that is intentional — rollback adds to history, not erases it)
+
+### Rollback after a bad firstboot script
+
+If the new image runs a firstboot script that corrupts `/etc` or `/var`, rollback to the
+old image restores the old binaries but **the corrupted data remains**. Design firstboot
+scripts to be idempotent and non-destructive.
+
+### Double rollback
+
+After rolling back to the previous image, that image becomes the "booted" slot and the
+image you rolled back from becomes the new "rollback" slot. You can roll forward again
+by triggering another rollback, or by uploading and applying the newer bundle fresh.
+
+---
+
+## Minimum version requirements
+
+| Component | Minimum version | Notes |
+|-----------|----------------|-------|
+| Fedora IoT | 43 | bootc integration, composefs, `/var` persistent overlay |
+| bootc | 1.1.0 | `bootc switch --transport containers-storage` support |
+| skopeo | 1.14+ | `containers-storage:` transport; OCI archive support |
+| Cockpit | 359+ | `cockpit.http()` API; required for CSP-compliant sidecar calls |
+| Python | 3.11+ | Bundled with Fedora IoT 43; used by sidecar and apply script |
+
+> **Note:** This updater is tested on Fedora IoT 43 only. Earlier Fedora IoT versions
+> use `rpm-ostree` without `bootc` and are not supported.

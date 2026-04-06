@@ -113,6 +113,34 @@ Used internally by the sidecar after upload completes — not typically called b
 
 ---
 
+## GET /logs
+
+Returns the tail of the persistent update log at `/var/lib/iot-updater/update.log`.
+
+**Query parameters:**
+- `lines` (optional, default 100, max 500) — number of lines to return from end of file
+
+**Response: 200 OK**
+
+```json
+{
+  "lines": [
+    "[2026-04-06T19:00:01Z] [START] apply-update.sh starting — bundle=/var/tmp/iot43-update.iotupdate",
+    "[2026-04-06T19:00:02Z] [INFO] Disk preflight OK: 45231616 KB available in /var/tmp",
+    "[2026-04-06T19:05:33Z] [SUCCESS] Update v13 applied — rebooting to localhost/inferno-appliance:v13"
+  ],
+  "path": "/var/lib/iot-updater/update.log"
+}
+```
+
+Returns `{"lines": [], "path": "..."}` if the log file does not exist yet.
+
+Log line format: `[ISO8601_TIMESTAMP] [LEVEL] message`
+
+Log levels: `START`, `INFO`, `ERROR`, `SUCCESS`, `COMPLETE`, `DRY_RUN`
+
+---
+
 ## POST /upload/start
 
 Begins an upload session.
