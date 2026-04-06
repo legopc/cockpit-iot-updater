@@ -5,6 +5,59 @@
 
 ---
 
+## Implementation Status
+
+| ID | Phase | Status |
+|----|-------|--------|
+| C-1 | A | ✅ Done |
+| C-2 | A | ✅ Done |
+| C-3 | F | ⏳ Deferred — requires auth design sprint |
+| C-4 | — | 🚫 Won't fix — intentional generic placeholder per user |
+| H-1 | A | ✅ Done |
+| H-2 | A | ✅ Done |
+| H-3 | A | ✅ Done |
+| H-4 | A | ✅ Done |
+| H-5 | C | ✅ Done |
+| H-6 | D | ✅ Done |
+| H-7 | D | ✅ Done |
+| H-8 | A | ✅ Done |
+| H-9 | A | ✅ Done |
+| H-10 | E | ✅ Done |
+| M-1 | C | ✅ Done |
+| M-2 | A | ✅ Done |
+| M-3 | E | ✅ Done |
+| M-4 | A | ✅ Done |
+| M-5 | D | ✅ Done |
+| M-6 | D | ✅ Done |
+| M-7 | — | ⏳ Open — progress bar stuck at 100% during verification |
+| M-8 | D | ✅ Done |
+| M-9 | D | ✅ Done |
+| M-10 | C | ✅ Done |
+| M-11 | E | ✅ Done |
+| M-12 | C | ✅ Done |
+| M-13 | C | ✅ Done |
+| M-14 | D | ✅ Done |
+| M-15 | — | ⏳ Open — fragile ConditionPathExists |
+| L-1 | C | ✅ Done |
+| L-2 | C | ✅ Done |
+| L-3 | C | ✅ Done (verified — format already correct) |
+| L-4 | C | ✅ Done |
+| L-7 | D | ✅ Done |
+| L-8 | D | ✅ Done |
+| L-9 | D | ✅ Done |
+| L-10 | D | ✅ Done |
+| L-11 | D | ✅ Done |
+| L-12 | E | ✅ Done |
+| L-13 | E | ✅ Done |
+| L-14 | E | ✅ Done |
+| L-15 | E | ✅ Done |
+| L-16 | A | ✅ Done |
+| L-17 | A | ✅ Done |
+
+**42 of 46 items done.** Remaining: C-3 (auth — Phase F deferred), C-4 (won't fix), M-7, M-15.
+
+---
+
 ## 🔴 CRITICAL — Fix Before Next Release
 
 ### C-1 · Command injection in `apply-update.sh` `fail()` / `mark_complete()`
