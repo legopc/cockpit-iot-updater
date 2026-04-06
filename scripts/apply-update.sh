@@ -32,14 +32,18 @@ write_status() {
 fail() {
     local msg="$1"
     write_status "error" 0 "$msg"
-    python3 -c "
-import json
+    IOT_MSG="$msg" python3 - <<'PYEOF'
+import json, os
 try:
-    h = json.load(open('$HISTORY_PATH'))
-    if h: h[-1]['status']='error'; h[-1]['error']='$msg'
-    json.dump(h, open('$HISTORY_PATH','w'), indent=2)
-except: pass
-" 2>/dev/null || true
+    path = '/var/lib/iot-updater/history.json'
+    h = json.load(open(path))
+    if h:
+        h[-1]['status'] = 'error'
+        h[-1]['error']  = os.environ['IOT_MSG']
+    json.dump(h, open(path, 'w'), indent=2)
+except Exception:
+    pass
+PYEOF
     echo "[apply-update] ERROR: $msg" >&2
     rm -rf "$WORK_DIR" || true
     exit 1
@@ -47,18 +51,22 @@ except: pass
 
 mark_complete() {
     local status="$1"
-    python3 -c "
-import json, time
+    IOT_STATUS="$status" python3 - <<'PYEOF'
+import json, os, time
 try:
-    h = json.load(open('$HISTORY_PATH'))
+    path = '/var/lib/iot-updater/history.json'
+    h = json.load(open(path))
     if h:
-        h[-1]['status'] = '$status'
+        h[-1]['status'] = os.environ['IOT_STATUS']
         h[-1]['applied_at_complete'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-    json.dump(h, open('$HISTORY_PATH', 'w'), indent=2)
+    json.dump(h, open(path, 'w'), indent=2)
 except Exception as e:
     print('history update error:', e)
-" 2>/dev/null || true
+PYEOF
 }
+
+# Cleanup on unexpected termination
+trap 'echo "[apply-update] Interrupted — cleaning up" >&2; rm -rf "$WORK_DIR"; exit 130' TERM INT HUP
 
 # ── Validate bundle ──────────────────────────────────────────────────────────
 write_status "applying" 5 "Validating bundle…"
@@ -66,15 +74,41 @@ write_status "applying" 5 "Validating bundle…"
 
 mkdir -p "$WORK_DIR"
 
+# Pre-flight: require at least 4 GB free in /var/tmp
+AVAIL_KB=$(df -k /var/tmp --output=avail | tail -1)
+[[ "$AVAIL_KB" -ge 4194304 ]] || fail "Insufficient space in /var/tmp: need 4 GB, have $((AVAIL_KB / 1024)) MB"
+
 # ── Extract version.json first (always small, first file in archive) ─────────
 write_status "applying" 8 "Reading bundle metadata…"
 tar -xf "$BUNDLE_PATH" -C "$WORK_DIR" version.json 2>/dev/null \
     || fail "Failed to extract version.json from bundle"
 [[ -f "$VERSION_JSON_PATH" ]] || fail "version.json not found in bundle"
 
-VERSION=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print(d.get('version','unknown'))" 2>/dev/null || echo "unknown")
-DRY_RUN=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print('yes' if d.get('dry_run') else 'no')" 2>/dev/null || echo "no")
-OCI_IMAGE_FILE=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print(d.get('oci_image_file',''))" 2>/dev/null || echo "")
+# Parse all version.json fields in one Python call
+eval "$(python3 - <<'PYEOF'
+import json, sys
+try:
+    d = json.load(open('/var/tmp/iot-update-work/version.json'))
+    def q(s): return "'" + str(s).replace("'", "'\\''") + "'"
+    print("VERSION=" + q(d.get('version', 'unknown')))
+    print("DRY_RUN=" + q('yes' if d.get('dry_run') else 'no'))
+    print("OCI_IMAGE_FILE=" + q(d.get('oci_image_file', '')))
+    print("IMAGE_NAME=" + q(d.get('oci_image_name', 'localhost/inferno-appliance:latest')))
+    print("EXPECTED_SHA256=" + q(d.get('image_sha256', '')))
+except Exception as e:
+    print("VERSION='unknown'")
+    print("DRY_RUN='no'")
+    print("OCI_IMAGE_FILE=''")
+    print("IMAGE_NAME='localhost/inferno-appliance:latest'")
+    print("EXPECTED_SHA256=''")
+PYEOF
+)"
+
+# Security: ensure oci_image_file is a plain filename (no path traversal)
+if [[ -n "$OCI_IMAGE_FILE" ]]; then
+    [[ "$OCI_IMAGE_FILE" == */* ]] && fail "oci_image_file contains path separator — refusing to extract"
+    [[ "$OCI_IMAGE_FILE" == .* ]] && fail "oci_image_file starts with dot — refusing to extract"
+fi
 
 echo "[apply-update] Bundle version=${VERSION} dry_run=${DRY_RUN} oci=${OCI_IMAGE_FILE:-none}"
 
@@ -116,8 +150,6 @@ fi
 
 # ── OCI/bootc path ────────────────────────────────────────────────────────────
 if [[ -n "$OCI_IMAGE_FILE" ]]; then
-    IMAGE_NAME=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print(d.get('oci_image_name','localhost/inferno-appliance:latest'))" 2>/dev/null || echo "localhost/inferno-appliance:latest")
-
     # Bundle size check (OCI bundles should be > 100MB)
     BUNDLE_SIZE=$(stat -c%s "$BUNDLE_PATH")
     [[ "$BUNDLE_SIZE" -gt 104857600 ]] || {
@@ -134,7 +166,6 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
 
     # Load OCI image into local container storage
     write_status "applying" 45 "Verifying image integrity (sha256)…"
-    EXPECTED_SHA256=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print(d.get('image_sha256',''))" 2>/dev/null || echo "")
     if [[ -n "$EXPECTED_SHA256" ]]; then
         echo "[apply-update] Verifying sha256 of image.tar…"
         ACTUAL_SHA256=$(sha256sum "${OCI_TAR_PATH}" | awk '{print $1}')
@@ -143,7 +174,7 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
         fi
         echo "[apply-update] sha256 OK: ${ACTUAL_SHA256}"
     else
-        echo "[apply-update] WARNING: No image_sha256 in version.json — skipping integrity check"
+        fail "No image_sha256 in version.json — refusing to apply unverified bundle"
     fi
 
     # Detect archive format: OCI archives contain index.json at root;
