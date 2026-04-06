@@ -21,6 +21,7 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 8088
 BUNDLE_PATH  = Path("/var/tmp/iot43-update.iotupdate")
 HISTORY_PATH = Path("/var/lib/iot-updater/history.json")
+LOG_PATH     = Path("/var/lib/iot-updater/update.log")
 STATUS_PATH  = Path("/run/iot-update-status.json")
 
 # Global state — only one concurrent update at a time
@@ -80,6 +81,18 @@ def append_history(entry: dict):
     history = load_history()
     history.append(entry)
     HISTORY_PATH.write_text(json.dumps(history, indent=2))
+
+
+def rotate_log(max_lines: int = 500):
+    """Keep log file under max_lines by trimming oldest entries."""
+    try:
+        if not LOG_PATH.exists():
+            return
+        lines = LOG_PATH.read_text().splitlines(keepends=True)
+        if len(lines) > max_lines:
+            LOG_PATH.write_text("".join(lines[-max_lines:]))
+    except Exception:
+        pass
 
 
 def extract_version_from_bundle(bundle_path: Path) -> dict | None:

@@ -9,10 +9,15 @@ User=root
 ExecStart=/usr/bin/python3 /var/lib/iot-updater/server.py
 Restart=on-failure
 RestartSec=5
-# Hardened — sidecar only needs /var/tmp and /var/lib/iot-updater
-ProtectSystem=false
+StandardOutput=journal
+StandardError=journal
+
+# Sandboxing — sidecar needs /var/lib/iot-updater, /var/tmp, /run
+ProtectSystem=strict
 ProtectHome=true
 NoNewPrivileges=false
+ReadWritePaths=/var/lib/iot-updater /var/tmp /run
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_BOOT
 
 [Install]
 WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 [Unit]
 Description=Cockpit IoT Updater — apply OSTree update and reboot
 Documentation=https://github.com/legopc/cockpit-iot-updater
-After=network.target
+After=network.target systemd-tmpfiles-setup.service
 # Prevent accidental re-run
 ConditionPathExists=/var/tmp/iot43-update.iotupdate
 
@@ -9,8 +9,9 @@ ConditionPathExists=/var/tmp/iot43-update.iotupdate
 Type=oneshot
 User=root
 ExecStart=/usr/bin/bash /var/lib/iot-updater/apply-update.sh
-# Do not time out — ostree delta apply on a 2GB bundle can take several minutes
-TimeoutStartSec=0
+# Timeout set to 30 minutes — ostree delta apply on a 2GB bundle can take several minutes
+# Prevents unlimited waits which could hang the system indefinitely
+TimeoutStartSec=1800
 StandardOutput=journal
 StandardError=journal
 # Must access /var/tmp (where bundle is written)

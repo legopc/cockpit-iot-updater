@@ -56,8 +56,8 @@ echo "[1/5] Creating directories…"
 mkdir -p "$LIB_DIR"
 
 echo "[2/5] Installing sidecar server…"
-install -m 755 "$SCRIPT_DIR/sidecar/server.py"         "$LIB_DIR/server.py"
-install -m 755 "$SCRIPT_DIR/scripts/apply-update.sh"   "$LIB_DIR/apply-update.sh"
+install -m 700 "$SCRIPT_DIR/sidecar/server.py"         "$LIB_DIR/server.py"
+install -m 700 "$SCRIPT_DIR/scripts/apply-update.sh"   "$LIB_DIR/apply-update.sh"
 
 echo "[3/5] Installing Cockpit page…"
 # On OCI-based Fedora IoT, /usr/share/cockpit may be read-only (composefs).

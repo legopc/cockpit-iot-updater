@@ -23,8 +23,10 @@ OSTREE_REPO="/ostree/repo"
 
 write_status() {
     local stage="$1" pct="$2" msg="$3"
+    local tmp="${STATUS_PATH}.tmp"
     printf '{"stage":"%s","progress_pct":%d,"message":"%s"}\n' \
-        "$stage" "$pct" "$msg" > "$STATUS_PATH"
+        "$stage" "$pct" "$msg" > "$tmp"
+    mv -f "$tmp" "$STATUS_PATH"
 }
 
 fail() {
