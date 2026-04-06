@@ -229,8 +229,15 @@ def trigger_apply(version_info: dict):
     )
     if result.returncode != 0:
         msg = result.stderr.strip() or "systemctl start failed"
-        set_state(stage="error", message=msg, error=msg)
+        # Re-read history: apply-update.sh may have already written "applied"
+        # before triggering a reboot, which causes systemd to cancel the job
+        # and return a non-zero exit code here — that is not an error.
         history = load_history()
+        if history and history[-1].get("status") in ("applied", "dry_run"):
+            set_state(stage="rebooting", progress_pct=100,
+                      message="Update applied — system is rebooting…")
+            return
+        set_state(stage="error", message=msg, error=msg)
         if history:
             history[-1]["status"] = "error"
             history[-1]["error"]  = msg
