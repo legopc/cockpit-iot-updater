@@ -39,6 +39,20 @@ document.addEventListener("DOMContentLoaded", function() {
             applyBtn.disabled = isDowngrade() && !this.checked;
         }
     });
+
+    document.getElementById("log-toggle").addEventListener("click", function() {
+        logOpen = !logOpen;
+        var out = document.getElementById("log-output");
+        this.textContent = (logOpen ? "▼ Hide" : "▶ Show") + " log output";
+        out.classList.toggle("open", logOpen);
+        if (logOpen) loadLog(200);
+    });
+    document.getElementById("log-refresh").addEventListener("click", function() {
+        if (logOpen) loadLog(200);
+    });
+
+    // Initial log load to show/hide the card based on /logs availability
+    loadLog();
 });
 
 // ── Status polling (sidecar state machine) ────────────────────────────────────
@@ -52,6 +66,7 @@ function pollStatus() {
             if (s.stage === "idle" && s.message && s.message.indexOf("applied") !== -1) {
                 loadHistory();
                 pollBootcStatus(true);
+                loadLog(200);
             }
         })
         .catch(function() {
@@ -443,11 +458,18 @@ function renderHistory(history) {
         var h = rev[i];
         var pillClass = "pill-" + (h.status || "applying").replace(/[^a-z_]/g, "");
         var sha = h.sha256 ? ('<span class="hash-display" title="' + esc(h.sha256) + '">' + h.sha256.substring(0,16) + "…</span>") : "";
+        var snippetHtml = "";
+        if (h.status === "error" && h.log_snippet && h.log_snippet.length) {
+            var snippetId = "snippet-" + i;
+            var snippetLines = h.log_snippet.map(function(l) { return esc(l); }).join("\n");
+            snippetHtml = '<br><button class="snippet-toggle" onclick="toggleSnippet(\'' + snippetId + '\')">▶ Show log</button>' +
+                          '<div class="log-snippet" id="' + snippetId + '">' + snippetLines + '</div>';
+        }
         rows.push(
             "<tr>" +
             "<td><strong>" + esc(h.version) + "</strong>" + (sha ? "<br><small>sha256: " + sha + "</small>" : "") + "</td>" +
             "<td>" + esc(h.applied_at_complete || h.applied_at || "—") + "</td>" +
-            "<td>" + esc(h.description || "—") + "</td>" +
+            "<td>" + esc(h.description || "—") + snippetHtml + "</td>" +
             "<td><span class='status-pill " + pillClass + "'>" + esc(h.status) + "</span></td>" +
             "</tr>"
         );
@@ -456,6 +478,49 @@ function renderHistory(history) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+function toggleSnippet(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var open = el.style.display === "block";
+    el.style.display = open ? "none" : "block";
+    var btn = el.previousElementSibling;
+    if (btn) btn.textContent = (open ? "▶" : "▼") + " Show log";
+}
+
+// ── Update Log viewer ─────────────────────────────────────────────────────────
+var logOpen = false;
+
+function loadLog(lines) {
+    lines = lines || 100;
+    api.get("/logs?lines=" + lines)
+        .then(function(text) {
+            var data = JSON.parse(text);
+            var logLines = data.lines || [];
+            renderLog(logLines);
+            document.getElementById("log-card").classList.add("visible");
+        })
+        .catch(function() {
+            // /logs not available — hide log card
+            document.getElementById("log-card").classList.remove("visible");
+        });
+}
+
+function renderLog(lines) {
+    var out = document.getElementById("log-output");
+    if (!lines.length) {
+        out.textContent = "(no log entries yet)";
+        return;
+    }
+    var html = lines.map(function(line) {
+        var cls = "";
+        if (line.indexOf("[ERROR]") !== -1)   cls = "log-line-error";
+        if (line.indexOf("[SUCCESS]") !== -1 || line.indexOf("[COMPLETE]") !== -1) cls = "log-line-success";
+        return '<span class="' + cls + '">' + esc(line) + '</span>';
+    }).join("\n");
+    out.innerHTML = html;
+    out.scrollTop = out.scrollHeight;
+}
+
 function updateProgress(pct, label) {
     document.getElementById("progress-fill").style.width = pct + "%";
     document.getElementById("progress-label").textContent = label;
