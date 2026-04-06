@@ -19,6 +19,8 @@ WORK_DIR="/var/tmp/iot-update-work"
 VERSION_JSON_PATH="${WORK_DIR}/version.json"
 STATUS_PATH="/run/iot-update-status.json"
 HISTORY_PATH="/var/lib/iot-updater/history.json"
+LOG_PATH="/var/lib/iot-updater/update.log"
+LOG_MAX_LINES=500
 OSTREE_REPO="/ostree/repo"
 
 write_status() {
@@ -44,6 +46,7 @@ try:
 except Exception:
     pass
 PYEOF
+    log "ERROR" "$msg"
     echo "[apply-update] ERROR: $msg" >&2
     rm -rf "$WORK_DIR" || true
     exit 1
@@ -63,20 +66,41 @@ try:
 except Exception as e:
     print('history update error:', e)
 PYEOF
+    log "COMPLETE" "status=$status"
+}
+
+log() {
+    local ts stage msg
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown")
+    stage="${1:-INFO}"
+    shift
+    msg="$*"
+    printf '[%s] [%s] %s\n' "$ts" "$stage" "$msg" >> "$LOG_PATH" 2>/dev/null || true
+}
+
+rotate_log() {
+    [[ -f "$LOG_PATH" ]] || return 0
+    local lines
+    lines=$(wc -l < "$LOG_PATH" 2>/dev/null || echo 0)
+    if [[ "$lines" -gt "$LOG_MAX_LINES" ]]; then
+        tail -n "$LOG_MAX_LINES" "$LOG_PATH" > "${LOG_PATH}.tmp" && mv -f "${LOG_PATH}.tmp" "$LOG_PATH"
+    fi
 }
 
 # Cleanup on unexpected termination
-trap 'echo "[apply-update] Interrupted — cleaning up" >&2; rm -rf "$WORK_DIR"; exit 130' TERM INT HUP
+trap 'log "ERROR" "Interrupted by signal — cleaning up"; echo "[apply-update] Interrupted — cleaning up" >&2; rm -rf "$WORK_DIR"; exit 130' TERM INT HUP
+rotate_log
+log "START" "apply-update.sh starting — bundle=${BUNDLE_PATH}"
 
 # ── Validate bundle ──────────────────────────────────────────────────────────
 write_status "applying" 5 "Validating bundle…"
 [[ -f "$BUNDLE_PATH" ]] || fail "Bundle not found at $BUNDLE_PATH"
-
-mkdir -p "$WORK_DIR"
+log "INFO" "Bundle found: $(stat -c%s "$BUNDLE_PATH" 2>/dev/null || echo "?") bytes"
 
 # Pre-flight: require at least 4 GB free in /var/tmp
 AVAIL_KB=$(df -k /var/tmp --output=avail | tail -1)
 [[ "$AVAIL_KB" -ge 4194304 ]] || fail "Insufficient space in /var/tmp: need 4 GB, have $((AVAIL_KB / 1024)) MB"
+log "INFO" "Disk preflight OK: ${AVAIL_KB} KB available in /var/tmp"
 
 # ── Extract version.json first (always small, first file in archive) ─────────
 write_status "applying" 8 "Reading bundle metadata…"
@@ -103,11 +127,13 @@ except Exception as e:
     print("EXPECTED_SHA256=''")
 PYEOF
 )"
+log "INFO" "Bundle metadata: version=${VERSION} dry_run=${DRY_RUN} oci=${OCI_IMAGE_FILE:-none}"
 
 # Security: ensure oci_image_file is a plain filename (no path traversal)
 if [[ -n "$OCI_IMAGE_FILE" ]]; then
     [[ "$OCI_IMAGE_FILE" == */* ]] && fail "oci_image_file contains path separator — refusing to extract"
     [[ "$OCI_IMAGE_FILE" == .* ]] && fail "oci_image_file starts with dot — refusing to extract"
+    log "INFO" "OCI image file validated: ${OCI_IMAGE_FILE}"
 fi
 
 echo "[apply-update] Bundle version=${VERSION} dry_run=${DRY_RUN} oci=${OCI_IMAGE_FILE:-none}"
@@ -139,9 +165,11 @@ fi
 if [[ "$DRY_RUN" == "yes" ]]; then
     write_status "applying" 40 "Dry run — simulating update v${VERSION}…"
     echo "[apply-update] DRY RUN — skipping all changes, sleeping 3s"
+    log "DRY_RUN" "Simulating update v${VERSION} — no changes"
     sleep 3
     write_status "applying" 90 "Dry run complete, cleaning up…"
     mark_complete "dry_run"
+    log "DRY_RUN" "Dry run complete for v${VERSION}"
     rm -rf "$WORK_DIR" "$BUNDLE_PATH"
     write_status "idle" 0 "Dry run v${VERSION} applied (no actual changes made)."
     echo "[apply-update] DRY RUN complete for v${VERSION}"
@@ -159,6 +187,7 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
     # Extract OCI image tar (large — streams directly, may take minutes)
     write_status "applying" 15 "Extracting OCI image from bundle (this takes a few minutes)…"
     echo "[apply-update] Extracting ${OCI_IMAGE_FILE} from bundle…"
+    log "INFO" "Extracting ${OCI_IMAGE_FILE} from bundle…"
     tar -xf "$BUNDLE_PATH" -C "$WORK_DIR" "$OCI_IMAGE_FILE" \
         || fail "Failed to extract ${OCI_IMAGE_FILE} from bundle"
     OCI_TAR_PATH="${WORK_DIR}/${OCI_IMAGE_FILE}"
@@ -173,7 +202,7 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
             fail "SHA256 mismatch: bundle may be corrupt.\n  expected: ${EXPECTED_SHA256}\n  actual:   ${ACTUAL_SHA256}"
         fi
         echo "[apply-update] sha256 OK: ${ACTUAL_SHA256}"
-    else
+        log "INFO" "SHA256 verified OK: ${ACTUAL_SHA256}"
         fail "No image_sha256 in version.json — refusing to apply unverified bundle"
     fi
 
@@ -187,23 +216,29 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
         SKOPEO_SRC="docker-archive:${OCI_TAR_PATH}"
         echo "[apply-update] Detected Docker archive format — loading ${IMAGE_NAME} via skopeo…"
     fi
+    SKOPEO_ERR=$(mktemp)
     skopeo copy \
         "${SKOPEO_SRC}" \
         "containers-storage:${IMAGE_NAME}" \
-        || fail "skopeo copy failed — check image archive integrity"
+        2>"$SKOPEO_ERR" || { log "ERROR" "skopeo stderr: $(cat "$SKOPEO_ERR")"; rm -f "$SKOPEO_ERR"; fail "skopeo copy failed — check image archive integrity"; }
+    log "INFO" "skopeo copy complete"
+    rm -f "$SKOPEO_ERR"
 
     # Switch bootc to the new image
     write_status "applying" 80 "Staging bootc update to ${IMAGE_NAME}…"
     echo "[apply-update] Running bootc switch to ${IMAGE_NAME}…"
+    BOOTC_ERR=$(mktemp)
     bootc switch --transport containers-storage "${IMAGE_NAME}" \
-        || fail "bootc switch failed"
+        2>"$BOOTC_ERR" || { log "ERROR" "bootc stderr: $(cat "$BOOTC_ERR")"; rm -f "$BOOTC_ERR"; fail "bootc switch failed"; }
+    log "INFO" "bootc switch complete — staged ${IMAGE_NAME}"
+    rm -f "$BOOTC_ERR"
 
     mark_complete "applied"
     rm -rf "$WORK_DIR" "$BUNDLE_PATH"
 
     write_status "rebooting" 100 "Update v${VERSION} staged. Rebooting in 5 seconds…"
     echo "[apply-update] SUCCESS — rebooting to apply ${IMAGE_NAME}"
-    sleep 5
+    log "SUCCESS" "Update v${VERSION} applied — rebooting to ${IMAGE_NAME}"
     systemctl reboot
     exit 0
 fi
@@ -223,19 +258,26 @@ TO_COMMIT=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); pr
 
 write_status "applying" 30 "Applying OSTree static delta (v${VERSION})…"
 echo "[apply-update] Applying static delta for commit ${TO_COMMIT}…"
+OSTREE_ERR=$(mktemp)
 ostree --repo="$OSTREE_REPO" static-delta apply-offline "$DELTA_PATH" \
-    || fail "ostree static-delta apply-offline failed"
+    2>"$OSTREE_ERR" || { log "ERROR" "ostree stderr: $(cat "$OSTREE_ERR")"; rm -f "$OSTREE_ERR"; fail "ostree static-delta apply-offline failed"; }
+rm -f "$OSTREE_ERR"
+log "INFO" "ostree static-delta applied for commit ${TO_COMMIT}"
 ostree --repo="$OSTREE_REPO" show "$TO_COMMIT" > /dev/null 2>&1 \
     || fail "Commit ${TO_COMMIT} not found in repo after delta apply"
 
 write_status "applying" 70 "Deploying new commit via rpm-ostree…"
 echo "[apply-update] Deploying ${TO_COMMIT}…"
-rpm-ostree deploy ":${TO_COMMIT}" || fail "rpm-ostree deploy failed"
+RPMOSTREE_ERR=$(mktemp)
+rpm-ostree deploy ":${TO_COMMIT}" \
+    2>"$RPMOSTREE_ERR" || { log "ERROR" "rpm-ostree stderr: $(cat "$RPMOSTREE_ERR")"; rm -f "$RPMOSTREE_ERR"; fail "rpm-ostree deploy failed"; }
+log "INFO" "rpm-ostree deploy complete for ${TO_COMMIT}"
+rm -f "$RPMOSTREE_ERR"
 
 mark_complete "applied"
 rm -rf "$WORK_DIR" "$BUNDLE_PATH"
 
 write_status "rebooting" 100 "Update applied (v${VERSION}). Rebooting in 5 seconds…"
 echo "[apply-update] SUCCESS — rebooting"
-sleep 5
+log "SUCCESS" "OSTree update v${VERSION} applied — rebooting"
 systemctl reboot
