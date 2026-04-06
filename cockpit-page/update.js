@@ -340,6 +340,12 @@ function sendChunks(file, totalChunks, index) {
         var reader = new FileReader();
         reader.onload = function(e) {
             var buffer = new Uint8Array(e.target.result);
+            var isLast = (index + 1 >= totalChunks);
+            // Show verifying animation *before* the request so user sees it while server hashes
+            if (isLast) {
+                updateProgress(99, "Verifying bundle integrity…");
+                document.getElementById("progress-fill").classList.add("progress-pulsing");
+            }
             uploadApi.request({
                 method: "POST",
                 path: "/upload",
@@ -353,11 +359,11 @@ function sendChunks(file, totalChunks, index) {
             .then(function(respBytes) {
                 var text = new TextDecoder().decode(respBytes);
                 var j = JSON.parse(text);
-                var pct = Math.round(((index + 1) / totalChunks) * 100);
-                // Show verifying state on last chunk (server streams hash check)
-                if (index + 1 >= totalChunks) {
-                    updateProgress(99, "Verifying bundle integrity…");
+                if (isLast) {
+                    document.getElementById("progress-fill").classList.remove("progress-pulsing");
+                    updateProgress(100, "Verification complete ✓");
                 } else {
+                    var pct = Math.round(((index + 1) / totalChunks) * 100);
                     updateProgress(pct, "Uploading… " + pct + "%");
                 }
                 resolve();

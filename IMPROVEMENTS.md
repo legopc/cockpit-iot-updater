@@ -29,7 +29,7 @@
 | M-4 | A | ✅ Done |
 | M-5 | D | ✅ Done |
 | M-6 | D | ✅ Done |
-| M-7 | — | ⏳ Open — progress bar stuck at 100% during verification |
+| M-7 | D | ✅ Done |
 | M-8 | D | ✅ Done |
 | M-9 | D | ✅ Done |
 | M-10 | C | ✅ Done |
@@ -54,7 +54,7 @@
 | L-16 | A | ✅ Done |
 | L-17 | A | ✅ Done |
 
-**42 of 46 items done.** Remaining: C-3 (auth — Phase F deferred), C-4 (won't fix), M-7, M-15.
+**43 of 46 items done.** Remaining: C-3 (auth — Phase F deferred), C-4 (won't fix), M-15.
 
 ---
 
