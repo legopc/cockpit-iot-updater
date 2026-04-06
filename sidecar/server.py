@@ -252,8 +252,18 @@ def trigger_apply(version_info: dict):
             return
         set_state(stage="error", message=msg, error=msg)
         if history:
+            # Read last 30 log lines to attach to history entry
+            log_snippet = []
+            try:
+                if LOG_PATH.exists():
+                    log_lines = LOG_PATH.read_text().splitlines()
+                    log_snippet = log_lines[-30:]
+            except Exception:
+                pass
             history[-1]["status"] = "error"
             history[-1]["error"]  = msg
+            if log_snippet:
+                history[-1]["log_snippet"] = log_snippet
             HISTORY_PATH.write_text(json.dumps(history, indent=2))
 
 
@@ -304,6 +314,27 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(200, state["version_info"])
             else:
                 self.send_json(404, {"error": "No bundle uploaded yet."})
+
+        elif self.path.startswith("/logs"):
+            # Parse ?lines=N query param (default 100, max 500)
+            lines_param = 100
+            if "?" in self.path:
+                qs = self.path.split("?", 1)[1]
+                for part in qs.split("&"):
+                    if part.startswith("lines="):
+                        try:
+                            lines_param = min(int(part[6:]), 500)
+                        except ValueError:
+                            pass
+            try:
+                if LOG_PATH.exists():
+                    all_lines = LOG_PATH.read_text().splitlines()
+                    tail = all_lines[-lines_param:]
+                else:
+                    tail = []
+            except Exception:
+                tail = []
+            self.send_json(200, {"lines": tail, "path": str(LOG_PATH)})
 
         else:
             self.send_json(404, {"error": "Not found."})
@@ -427,6 +458,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    rotate_log()
     server = http.server.ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), UpdateHandler)
     print(f"[iot-updater] Listening on {LISTEN_HOST}:{LISTEN_PORT}")
     server.serve_forever()
