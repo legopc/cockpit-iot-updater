@@ -23,6 +23,8 @@ BUNDLE_PATH  = Path("/var/tmp/iot43-update.iotupdate")
 HISTORY_PATH = Path("/var/lib/iot-updater/history.json")
 LOG_PATH     = Path("/var/lib/iot-updater/update.log")
 STATUS_PATH  = Path("/run/iot-update-status.json")
+HISTORY_ARCHIVE_PATH = Path("/var/lib/iot-updater/history-archive.json")
+HISTORY_MAX_ENTRIES  = 100
 
 # Global state — only one concurrent update at a time
 _state = {
@@ -33,6 +35,8 @@ _state = {
     "error": None,
 }
 _state_lock = threading.Lock()
+_started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+_last_state_change = _started_at
 
 # Cached bootc status
 _bootc_cache = {"data": None, "ts": 0}
@@ -40,8 +44,10 @@ _bootc_lock  = threading.Lock()
 
 
 def set_state(**kwargs):
+    global _last_state_change
     with _state_lock:
         _state.update(kwargs)
+        _last_state_change = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def get_state():
@@ -80,6 +86,18 @@ def load_history():
 def append_history(entry: dict):
     history = load_history()
     history.append(entry)
+    if len(history) > HISTORY_MAX_ENTRIES:
+        overflow = history[:-HISTORY_MAX_ENTRIES]
+        history  = history[-HISTORY_MAX_ENTRIES:]
+        try:
+            if HISTORY_ARCHIVE_PATH.exists():
+                archive = json.loads(HISTORY_ARCHIVE_PATH.read_text())
+            else:
+                archive = []
+        except Exception:
+            archive = []
+        archive.extend(overflow)
+        HISTORY_ARCHIVE_PATH.write_text(json.dumps(archive, indent=2))
     HISTORY_PATH.write_text(json.dumps(history, indent=2))
 
 
@@ -235,11 +253,22 @@ def trigger_apply(version_info: dict):
         "status":      "applying",
     }
     append_history(entry)
+    threading.Thread(target=lambda: get_bootc_status(force=True), daemon=True).start()
 
-    result = subprocess.run(
-        ["systemctl", "start", "iot-update.service"],
-        capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            ["systemctl", "start", "iot-update.service"],
+            capture_output=True, text=True, timeout=7200
+        )
+    except subprocess.TimeoutExpired:
+        msg = "iot-update.service timed out after 2 hours"
+        set_state(stage="error", message=msg, error=msg)
+        history = load_history()
+        if history:
+            history[-1]["status"] = "error"
+            history[-1]["error"]  = msg
+            HISTORY_PATH.write_text(json.dumps(history, indent=2))
+        return
     if result.returncode != 0:
         msg = result.stderr.strip() or "systemctl start failed"
         # Re-read history: apply-update.sh may have already written "applied"
@@ -270,6 +299,7 @@ def trigger_apply(version_info: dict):
 def do_rollback():
     """Run bootc rollback --apply in a background thread."""
     set_state(stage="rebooting", progress_pct=100, message="Rolling back… device will reboot.")
+    threading.Thread(target=lambda: get_bootc_status(force=True), daemon=True).start()
     subprocess.run(["bootc", "rollback", "--apply"], capture_output=True)
 
 
@@ -300,13 +330,18 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         read_external_status()
 
         if self.path == "/status":
-            self.send_json(200, get_state())
+            s = get_state()
+            s["started_at"] = _started_at
+            s["last_update_at"] = _last_state_change
+            self.send_json(200, s)
 
         elif self.path == "/history":
             self.send_json(200, load_history())
 
         elif self.path == "/bootc-status":
-            self.send_json(200, get_bootc_status())
+            data = get_bootc_status()
+            age = round(time.time() - _bootc_cache["ts"], 1) if _bootc_cache["ts"] else None
+            self.send_json(200, {**data, "cache_age_seconds": age})
 
         elif self.path == "/version-preview":
             state = get_state()
@@ -335,6 +370,9 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 tail = []
             self.send_json(200, {"lines": tail, "path": str(LOG_PATH)})
+
+        elif self.path == "/health":
+            self.send_json(200, {"ok": True, "service": "iot-updater", "stage": get_state()["stage"]})
 
         else:
             self.send_json(404, {"error": "Not found."})
@@ -378,6 +416,11 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         total_chunks = int(self.headers.get("X-Total-Chunks", 1))
         content_length = int(self.headers.get("Content-Length", 0))
 
+        # Validate chunk headers
+        if total_chunks <= 0 or chunk_index < 0 or chunk_index >= total_chunks:
+            self.send_json(400, {"error": f"Invalid chunk headers: index={chunk_index} total={total_chunks}"})
+            return
+
         if content_length <= 0:
             self.send_json(400, {"error": "Empty chunk."})
             return
@@ -392,6 +435,13 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                     break
                 f.write(data)
                 remaining -= len(data)
+
+        # Restrict bundle file permissions — it contains a full OCI image
+        if chunk_index == 0:
+            try:
+                os.chmod(BUNDLE_PATH, 0o600)
+            except Exception:
+                pass
 
         progress = int(((chunk_index + 1) / total_chunks) * 100)
         set_state(stage="uploading", progress_pct=progress,
