@@ -145,6 +145,9 @@
     .btn-ghost   { background: transparent; color: #06c; border-color: #06c; }
     .btn-danger  { background: #c9190b; color: #fff; border-color: #c9190b; }
     .btn-danger:disabled { background: #e8a09a; border-color: #e8a09a; cursor: not-allowed; }
+    .btn-warning { background: #f0ab00; color: #151515; border-color: #f0ab00; }
+    .btn-warning:disabled { background: #f5cc6b; border-color: #f5cc6b; cursor: not-allowed; }
+    .btn { min-height: 44px; }
     .btn + .btn  { margin-left: 10px; }
 
     /* History table */
@@ -163,6 +166,8 @@
     .pill-applying { background: #fff3e0; color: #8a6900; }
     .pill-error    { background: #fde8e8; color: #c9190b; }
     .pill-dry_run  { background: #e7f2fa; color: #06c; }
+    .copy-hash-btn { background: none; border: none; cursor: pointer; font-size: 0.85rem; padding: 0 2px; opacity: 0.6; }
+    .copy-hash-btn:hover { opacity: 1; }
 
     /* Sidecar warning */
     #sidecar-warn {
@@ -202,6 +207,30 @@
       margin-top: 6px; display: none;
     }
     .snippet-toggle { font-size: 0.78rem; color: #06c; cursor: pointer; border: none; background: none; padding: 0; margin-top: 4px; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1a1a1a; color: #e0e0e0; }
+      .card { background: #2a2a2a; border-color: #444; }
+      .card h2 { color: #e0e0e0; }
+      #drop-zone { border-color: #4a9eff; }
+      #version-preview { background: #222; border-color: #444; }
+      #version-preview td:first-child { color: #aaa; }
+      .deploy-table td:first-child { color: #aaa; }
+      #history-table th { background: #333; border-color: #444; }
+      #history-table td { border-color: #333; }
+      .badge-idle { background: #333; color: #aaa; }
+      .badge-uploading { background: #1a3a5c; color: #4a9eff; }
+      .badge-verifying { background: #1a3a5c; color: #7ab8ff; }
+      .badge-applying  { background: #3a2a00; color: #f0ab00; }
+      .badge-rebooting { background: #2a2a2a; color: #e0e0e0; }
+      .badge-error     { background: #3a1a1a; color: #ff6b6b; }
+      .btn-primary { background: #4a9eff; border-color: #4a9eff; color: #fff; }
+      .btn-ghost   { color: #4a9eff; border-color: #4a9eff; }
+      .btn-danger  { background: #c9190b; border-color: #c9190b; }
+      #sidecar-warn { background: #3a1a1a; border-color: #c9190b; }
+      #downgrade-warning { background: #3a2a00; border-color: #f0ab00; color: #f0ab00; }
+      #staged-banner { background: #3a2a00; border-color: #f0ab00; color: #f0ab00; }
+      .progress-bar-wrap { background: #444; }
+    }
   </style>
 </head>
 <body>
@@ -245,7 +274,7 @@
           Digest: <span id="rb-digest" class="hash-display">—</span>
         </span>
       </div>
-      <button class="btn btn-danger" id="btn-rollback">⏎ Rollback and Reboot</button>
+      <button class="btn btn-warning" id="btn-rollback">⏎ Rollback and Reboot</button>
     </div>
   </div>
 

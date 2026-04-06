@@ -10,12 +10,23 @@ const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB per chunk
 const api       = cockpit.http(8088);
 const uploadApi = cockpit.http(8088, { binary: true });
 
-let selectedFile     = null;
-let versionPreview   = null;
-let currentVersion   = null;
-let statusPoller     = null;
-let bootcPoller      = null;
-let sidecarOk        = false;
+var state = {
+    selectedFile:   null,
+    versionPreview: null,
+    currentVersion: null,
+    statusPoller:   null,
+    bootcPoller:    null,
+    sidecarOk:      false,
+};
+
+function resetState() {
+    state.selectedFile   = null;
+    state.versionPreview = null;
+    // Note: currentVersion, pollers, sidecarOk are not reset — they reflect live device state
+}
+
+var statusFailCount = 0;
+var rebootCountdown = null;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", function() {
@@ -35,7 +46,7 @@ document.addEventListener("DOMContentLoaded", function() {
     document.getElementById("btn-rollback").addEventListener("click", doRollback);
     document.getElementById("allow-downgrade").addEventListener("change", function() {
         var applyBtn = document.getElementById("btn-apply");
-        if (versionPreview) {
+        if (state.versionPreview) {
             applyBtn.disabled = isDowngrade() && !this.checked;
         }
     });
@@ -53,14 +64,22 @@ document.addEventListener("DOMContentLoaded", function() {
 
     // Initial log load to show/hide the card based on /logs availability
     loadLog();
+
+    window.addEventListener("beforeunload", function() {
+        if (state.statusPoller) clearTimeout(state.statusPoller);
+        if (state.bootcPoller)  clearTimeout(state.bootcPoller);
+        if (rebootCountdown)    clearInterval(rebootCountdown);
+        try { api.request({ method: "POST", path: "/upload/cancel", body: "" }); } catch(e) {}
+    });
 });
 
 // ── Status polling (sidecar state machine) ────────────────────────────────────
 function pollStatus() {
     api.get("/status")
         .then(function(text) {
+            statusFailCount = 0;
             var s = JSON.parse(text);
-            sidecarOk = true;
+            state.sidecarOk = true;
             document.getElementById("sidecar-warn").style.display = "none";
             renderStatus(s);
             if (s.stage === "idle" && s.message && s.message.indexOf("applied") !== -1) {
@@ -70,13 +89,38 @@ function pollStatus() {
             }
         })
         .catch(function() {
-            sidecarOk = false;
-            document.getElementById("sidecar-warn").style.display = "block";
-            setBadge("error", "Sidecar unreachable");
+            statusFailCount++;
+            if (statusFailCount >= 5 && rebootCountdown === null) {
+                startRebootCountdown();
+            } else if (statusFailCount < 5) {
+                state.sidecarOk = false;
+                document.getElementById("sidecar-warn").style.display = "block";
+                setBadge("error", "Sidecar unreachable");
+            }
         })
         .always(function() {
-            statusPoller = setTimeout(pollStatus, 2000);
+            state.statusPoller = setTimeout(pollStatus, 2000);
         });
+}
+
+function startRebootCountdown() {
+    var secs = 60;
+    var warn = document.getElementById("sidecar-warn");
+    warn.style.display = "block";
+    warn.style.background = "#fff3e0";
+    warn.style.color = "#8a6900";
+    warn.style.border = "1px solid #f0ab00";
+
+    rebootCountdown = setInterval(function() {
+        secs--;
+        warn.textContent = "⏳ Device is rebooting… reconnecting in " + secs + "s";
+        if (secs <= 0) {
+            clearInterval(rebootCountdown);
+            rebootCountdown = null;
+            location.reload();
+        }
+    }, 1000);
+    warn.textContent = "⏳ Device is rebooting… reconnecting in " + secs + "s";
 }
 
 function renderStatus(s) {
@@ -100,8 +144,8 @@ function renderStatus(s) {
 
     if (s.stage === "idle") {
         applyBtn.style.display = "";
-        applyBtn.disabled = !versionPreview || (isDowngrade() && !document.getElementById("allow-downgrade").checked);
-        if (versionPreview) applyBtn.textContent = "Apply v" + versionPreview.version;
+        applyBtn.disabled = !state.versionPreview || (isDowngrade() && !document.getElementById("allow-downgrade").checked);
+        if (state.versionPreview) applyBtn.textContent = state.versionPreview.dry_run ? "Apply v" + state.versionPreview.version + " (dry run)" : "Apply & Reboot v" + state.versionPreview.version;
         cancelBtn.style.display = "none";
     } else if (isActive) {
         applyBtn.style.display = "none";
@@ -109,17 +153,18 @@ function renderStatus(s) {
     } else if (s.stage === "error") {
         // If there's a ready bundle (version_info set before apply was triggered),
         // allow retry. Otherwise reset the UI so the user can drop a new file.
-        if (versionPreview) {
+        if (state.versionPreview) {
             applyBtn.style.display = "";
             applyBtn.disabled = false;
-            applyBtn.textContent = "Retry Apply v" + versionPreview.version;
+            var isDry = state.versionPreview && state.versionPreview.dry_run;
+            applyBtn.textContent = (isDry ? "Retry Apply" : "Retry Apply & Reboot") + " v" + state.versionPreview.version;
         } else {
             applyBtn.style.display = "none";
             // Reset drop zone so user can select a new file without reloading
             document.getElementById("dz-title").textContent = "Drop .iotupdate file here";
             document.getElementById("dz-sub").textContent   = "or click to browse";
             document.getElementById("file-input").value     = "";
-            selectedFile = null;
+            state.selectedFile = null;
         }
         cancelBtn.style.display = "none";
     } else if (s.stage === "rebooting") {
@@ -166,7 +211,7 @@ function pollBootcStatus(force) {
         })
         .always(function() {
             // Poll every 10s — bootc status is cached 5s on sidecar
-            bootcPoller = setTimeout(pollBootcStatus, 10000);
+            state.bootcPoller = setTimeout(pollBootcStatus, 10000);
         });
 }
 
@@ -181,7 +226,7 @@ function renderBootcStatus(bs) {
     // Current version for downgrade detection
     if (booted.image) {
         var m = booted.image.match(/:(.+)$/);
-        if (m) currentVersion = m[1];
+        if (m) state.currentVersion = m[1];
     }
 
     // Staged banner
@@ -245,7 +290,7 @@ function handleFileSelected(file) {
         showError("Please select a .iotupdate file.");
         return;
     }
-    selectedFile = file;
+    state.selectedFile = file;
     clearError();
     document.getElementById("dz-title").textContent = file.name;
     document.getElementById("dz-sub").textContent =
@@ -255,6 +300,7 @@ function handleFileSelected(file) {
 
 // ── Chunked upload via cockpit.http() ─────────────────────────────────────────
 function uploadAndPreview(file) {
+    resetState();
     var totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
     api.request({ method: "POST", path: "/upload/start", body: "" })
@@ -273,8 +319,8 @@ function uploadAndPreview(file) {
                 return;
             }
             if (s.version_info) {
-                versionPreview = s.version_info;
-                showVersionPreview(versionPreview);
+                state.versionPreview = s.version_info;
+                showVersionPreview(state.versionPreview);
             } else {
                 showError("Upload complete but version info missing from bundle.");
             }
@@ -345,38 +391,51 @@ function showVersionPreview(info) {
     document.getElementById("downgrade-warning").style.display = isDowngrade() ? "block" : "none";
 
     var applyBtn = document.getElementById("btn-apply");
-    applyBtn.textContent = "Apply v" + info.version;
+    applyBtn.textContent = info.dry_run ? "Apply v" + info.version + " (dry run)" : "Apply & Reboot v" + info.version;
     applyBtn.disabled    = isDowngrade() && !document.getElementById("allow-downgrade").checked;
 
     document.getElementById("dz-sub").textContent =
-        (selectedFile.size / 1024 / 1024).toFixed(1) + " MB — ready to apply";
+        (state.selectedFile.size / 1024 / 1024).toFixed(1) + " MB — ready to apply";
 }
 
 function isDowngrade() {
-    if (!currentVersion || !versionPreview || !versionPreview.version) return false;
-    return versionCompare(versionPreview.version, currentVersion) <= 0;
+    if (!state.currentVersion || !state.versionPreview || !state.versionPreview.version) return false;
+    return versionCompare(state.versionPreview.version, state.currentVersion) <= 0;
 }
 
 function versionCompare(a, b) {
-    // Handle "v9" style tags by stripping leading "v"
-    var norm = function(s) { return s.replace(/^v/, "").split(".").map(Number); };
+    // Strip leading "v", split on "-" to separate pre-release suffix, then compare numeric parts
+    var norm = function(s) {
+        var base = s.replace(/^v/, "").split("-")[0]; // strip pre-release suffix
+        return base.split(".").map(function(p) { return parseInt(p, 10) || 0; });
+    };
     var pa = norm(a), pb = norm(b);
     for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
         var diff = (pa[i] || 0) - (pb[i] || 0);
         if (diff !== 0) return diff;
     }
+    // If numeric parts equal, a pre-release suffix means older (e.g. v2-rc1 < v2)
+    var hasPre = function(s) { return s.replace(/^v/, "").indexOf("-") !== -1; };
+    if (hasPre(a) && !hasPre(b)) return -1;
+    if (!hasPre(a) && hasPre(b)) return 1;
     return 0;
 }
 
 // ── Apply / Cancel ────────────────────────────────────────────────────────────
 function applyUpdate() {
-    if (!versionPreview) return;
-    var msg = "Apply update " + versionPreview.version + "?";
-    if (!versionPreview.dry_run) msg += "\n\nThe device will reboot after the update is applied.";
+    if (!state.versionPreview) return;
+    var msg = "Apply update " + state.versionPreview.version + "?";
+    if (!state.versionPreview.dry_run) msg += "\n\nThe device will reboot after the update is applied.";
     if (!confirm(msg)) return;
+
+    var applyBtn = document.getElementById("btn-apply");
+    applyBtn.disabled = true;
+    applyBtn.textContent = "Applying…";
 
     api.request({ method: "POST", path: "/upload/apply", body: "" })
         .catch(function(err) {
+            applyBtn.disabled = false;
+            applyBtn.textContent = "Retry Apply " + state.versionPreview.version;
             showError("Failed to trigger update: " + (err.message || err.problem || String(err)));
         });
 }
@@ -384,8 +443,7 @@ function applyUpdate() {
 function cancelUpload() {
     api.request({ method: "POST", path: "/upload/cancel", body: "" })
         .then(function() {
-            versionPreview = null;
-            selectedFile   = null;
+            resetState();
             document.getElementById("version-preview").style.display  = "none";
             document.getElementById("downgrade-warning").style.display = "none";
             document.getElementById("pv-hash-row").style.display       = "none";
@@ -434,8 +492,9 @@ function loadHistory() {
         })
         .catch(function() {
             document.getElementById("history-loading").style.display = "none";
-            document.getElementById("history-empty").style.display   = "block";
-            document.getElementById("history-empty").textContent = "Could not load history.";
+            var emptyEl = document.getElementById("history-empty");
+            emptyEl.style.display = "block";
+            emptyEl.innerHTML = 'Could not load history. <button class="btn btn-ghost" onclick="loadHistory()" style="font-size:0.85rem;padding:4px 10px;margin-left:8px">↻ Retry</button>';
         });
 }
 
@@ -457,7 +516,11 @@ function renderHistory(history) {
     for (var i = 0; i < rev.length; i++) {
         var h = rev[i];
         var pillClass = "pill-" + (h.status || "applying").replace(/[^a-z_]/g, "");
-        var sha = h.sha256 ? ('<span class="hash-display" title="' + esc(h.sha256) + '">' + h.sha256.substring(0,16) + "…</span>") : "";
+        var sha = h.sha256 ? (
+            '<span class="hash-display" title="' + esc(h.sha256) + '">' +
+            h.sha256.substring(0, 16) + '…</span> ' +
+            '<button class="copy-hash-btn" onclick="copyHash(\'' + esc(h.sha256) + '\')" title="Copy SHA256">��</button>'
+        ) : "";
         var snippetHtml = "";
         if (h.status === "error" && h.log_snippet && h.log_snippet.length) {
             var snippetId = "snippet-" + i;
@@ -544,4 +607,10 @@ function esc(s) {
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+}
+
+function copyHash(hash) {
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(hash).catch(function() {});
+    }
 }
