@@ -49,14 +49,19 @@ def get_state():
 
 
 def read_external_status():
-    """Merge status written by apply-update.sh if it exists."""
+    """Merge status written by apply-update.sh if it exists.
+    Only applied when the sidecar is in a passive state (idle/error/rebooting)
+    so that STATUS_PATH from a previous run does not clobber an active upload.
+    """
     try:
         if STATUS_PATH.exists():
             data = json.loads(STATUS_PATH.read_text())
             with _state_lock:
-                _state.update(data)
-                if data.get("stage") == "idle":
-                    _state["error"] = None
+                # Never let an old status file overwrite an active upload/verify session
+                if _state["stage"] not in ("uploading", "extracting", "verifying"):
+                    _state.update(data)
+                    if data.get("stage") == "idle":
+                        _state["error"] = None
     except Exception:
         pass
 
@@ -292,6 +297,8 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(409, {"error": f"Cannot start upload in state: {state['stage']}"})
             return
         BUNDLE_PATH.unlink(missing_ok=True)
+        # Clear stale status file from previous run so it cannot bleed into this session
+        STATUS_PATH.unlink(missing_ok=True)
         set_state(stage="uploading", progress_pct=0, message="Upload started.",
                   version_info=None, error=None)
         self.send_json(200, {"ok": True})

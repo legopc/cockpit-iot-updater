@@ -61,7 +61,7 @@ IMAGE_NAME="${IMAGE:-inferno-appliance:unknown}"
 if [[ -n "$IMAGE" ]]; then
     echo "Exporting podman image: ${IMAGE}"
     echo "  (This may take a few minutes for a ~2GB image…)"
-    podman save "${IMAGE}" -o "${IMAGE_TAR}" || {
+    podman save --format oci-archive "${IMAGE}" -o "${IMAGE_TAR}" || {
         echo "ERROR: podman save failed. Is the image '${IMAGE}' available locally?"
         echo "  Try: podman images | grep inferno-appliance"
         exit 1

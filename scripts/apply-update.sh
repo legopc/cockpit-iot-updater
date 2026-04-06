@@ -121,10 +121,18 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
         echo "[apply-update] WARNING: No image_sha256 in version.json — skipping integrity check"
     fi
 
-    # Load OCI image into local container storage
+    # Detect archive format: OCI archives contain index.json at root;
+    # Docker archives (produced by podman/docker save) do not.
     write_status "applying" 50 "Loading OCI image into container storage…"
-    echo "[apply-update] Loading ${IMAGE_NAME} via skopeo…"
-        "oci-archive:${OCI_TAR_PATH}" \
+    if tar -tf "${OCI_TAR_PATH}" index.json > /dev/null 2>&1; then
+        SKOPEO_SRC="oci-archive:${OCI_TAR_PATH}"
+        echo "[apply-update] Detected OCI archive format — loading ${IMAGE_NAME} via skopeo…"
+    else
+        SKOPEO_SRC="docker-archive:${OCI_TAR_PATH}"
+        echo "[apply-update] Detected Docker archive format — loading ${IMAGE_NAME} via skopeo…"
+    fi
+    skopeo copy \
+        "${SKOPEO_SRC}" \
         "containers-storage:${IMAGE_NAME}" \
         || fail "skopeo copy failed — check image archive integrity"
 
