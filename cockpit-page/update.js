@@ -25,8 +25,25 @@ function resetState() {
     // Note: currentVersion, pollers, sidecarOk are not reset — they reflect live device state
 }
 
+// ── Toast notifications ───────────────────────────────────────────────────────
+function showToast(type, msg, autoDismiss) {
+    var icons = { success: "✓", error: "✕", info: "ℹ" };
+    var area = document.getElementById("toast-area");
+    var toast = document.createElement("div");
+    toast.className = "toast toast-" + type;
+    toast.innerHTML =
+        '<span class="toast-icon">' + (icons[type] || "ℹ") + '</span>' +
+        '<span style="flex:1">' + esc(msg) + '</span>' +
+        '<span class="toast-close" onclick="this.parentElement.remove()">×</span>';
+    area.appendChild(toast);
+    if (autoDismiss !== false) {
+        setTimeout(function() { if (toast.parentElement) toast.remove(); }, 6000);
+    }
+}
+
 var statusFailCount = 0;
 var rebootCountdown = null;
+var _prevStage = null;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", function() {
@@ -53,9 +70,9 @@ document.addEventListener("DOMContentLoaded", function() {
 
     document.getElementById("log-toggle").addEventListener("click", function() {
         logOpen = !logOpen;
-        var out = document.getElementById("log-output");
-        this.textContent = (logOpen ? "▼ Hide" : "▶ Show") + " log output";
-        out.classList.toggle("open", logOpen);
+        var wrap = document.getElementById("log-body-wrap");
+        wrap.style.display = logOpen ? "block" : "none";
+        this.textContent = (logOpen ? "▼ Hide" : "▶ Show");
         if (logOpen) loadLog(200);
     });
     document.getElementById("log-refresh").addEventListener("click", function() {
@@ -105,25 +122,32 @@ function pollStatus() {
 
 function startRebootCountdown() {
     var secs = 60;
-    var warn = document.getElementById("sidecar-warn");
-    warn.style.display = "block";
-    warn.style.background = "#fff3e0";
-    warn.style.color = "#8a6900";
-    warn.style.border = "1px solid #f0ab00";
+    showToast("info", "⏳ Device is rebooting… reconnecting in " + secs + "s", false);
+    var toastEl = document.querySelector("#toast-area .toast:last-child");
 
     rebootCountdown = setInterval(function() {
         secs--;
-        warn.textContent = "⏳ Device is rebooting… reconnecting in " + secs + "s";
+        if (toastEl) {
+            var msgEl = toastEl.querySelector("span:nth-child(2)");
+            if (msgEl) msgEl.textContent = "⏳ Device is rebooting… reconnecting in " + secs + "s";
+        }
         if (secs <= 0) {
             clearInterval(rebootCountdown);
             rebootCountdown = null;
             location.reload();
         }
     }, 1000);
-    warn.textContent = "⏳ Device is rebooting… reconnecting in " + secs + "s";
 }
 
 function renderStatus(s) {
+    if (s.stage === "error" && _prevStage !== "error") {
+        showToast("error", s.message || "Update failed.");
+    }
+    if (s.stage === "idle" && s.message && s.message.indexOf("applied") !== -1 && _prevStage === "rebooting") {
+        showToast("success", "Update applied successfully!");
+    }
+    _prevStage = s.stage;
+
     setBadge(s.stage, stageLabel(s.stage));
 
     var activeStages = ["uploading", "extracting", "verifying", "queued", "applying", "rebooting"];
@@ -136,8 +160,10 @@ function renderStatus(s) {
     }
 
     var errEl = document.getElementById("error-msg");
-    errEl.style.display = s.stage === "error" ? "block" : "none";
-    if (s.stage === "error") errEl.textContent = s.message || "An error occurred.";
+    if (errEl) {
+        errEl.style.display = s.stage === "error" ? "block" : "none";
+        if (s.stage === "error") errEl.textContent = s.message || "An error occurred.";
+    }
 
     var applyBtn  = document.getElementById("btn-apply");
     var cancelBtn = document.getElementById("btn-cancel");
@@ -189,14 +215,23 @@ function stageLabel(stage) {
 
 function setBadge(stage, label) {
     var b = document.getElementById("status-badge");
-    b.textContent = label;
-    var cls = "idle";
-    if (["uploading", "extracting"].indexOf(stage) !== -1) cls = "uploading";
-    else if (stage === "verifying") cls = "verifying";
-    else if (["queued", "applying"].indexOf(stage) !== -1) cls = "applying";
-    else if (stage === "rebooting") cls = "rebooting";
-    else if (stage === "error")     cls = "error";
-    b.className = "badge-" + cls;
+    if (b) {
+        b.textContent = label;
+        var cls = "idle";
+        if (["uploading", "extracting"].indexOf(stage) !== -1) cls = "uploading";
+        else if (stage === "verifying") cls = "verifying";
+        else if (["queued", "applying"].indexOf(stage) !== -1) cls = "applying";
+        else if (stage === "rebooting") cls = "rebooting";
+        else if (stage === "error")     cls = "error";
+        b.className = "badge-" + cls;
+    }
+    // Update header status pill
+    var dot = document.getElementById("hdr-status-dot");
+    var txt = document.getElementById("hdr-status");
+    if (dot && txt) {
+        txt.textContent = label;
+        dot.className = "pill-dot " + (stage === "error" ? "red" : stage === "idle" ? "green" : stage === "rebooting" ? "orange" : "blue");
+    }
 }
 
 // ── Bootc status (real deployment info) ───────────────────────────────────────
@@ -227,6 +262,13 @@ function renderBootcStatus(bs) {
     if (booted.image) {
         var m = booted.image.match(/:(.+)$/);
         if (m) state.currentVersion = m[1];
+    }
+
+    // Update header version pill
+    var hdrVersion = document.getElementById("hdr-version");
+    if (hdrVersion) {
+        var imgTag = booted.image ? (booted.image.match(/:(.+)$/) || [])[1] : null;
+        hdrVersion.textContent = imgTag ? imgTag : (booted.version || "v—");
     }
 
     // Staged banner
@@ -478,9 +520,7 @@ function doRollback() {
         .then(function(text) {
             var r = JSON.parse(text);
             setBadge("rebooting", "Rolling back…");
-            // Page will become unreachable on reboot — show message
-            document.getElementById("error-msg").style.color = "#1e7e34";
-            showError("Rollback triggered. Device is rebooting to " + (r.rolling_back_to || rbImage) + ".\nReconnect in ~60 seconds.");
+            showToast("info", "Rollback triggered. Device is rebooting to " + (r.rolling_back_to || rbImage) + ". Reconnect in ~60 seconds.");
         })
         .catch(function(err) {
             btn.disabled = false;
@@ -500,7 +540,7 @@ function loadHistory() {
             document.getElementById("history-loading").style.display = "none";
             var emptyEl = document.getElementById("history-empty");
             emptyEl.style.display = "block";
-            emptyEl.innerHTML = 'Could not load history. <button class="btn btn-ghost" onclick="loadHistory()" style="font-size:0.85rem;padding:4px 10px;margin-left:8px">↻ Retry</button>';
+            emptyEl.innerHTML = 'Could not load history. <button class="btn btn-secondary btn-sm" onclick="loadHistory()" style="margin-left:8px">↻ Retry</button>';
         });
 }
 
@@ -582,9 +622,11 @@ function renderLog(lines) {
     }
     var html = lines.map(function(line) {
         var cls = "";
-        if (line.indexOf("[ERROR]") !== -1)   cls = "log-line-error";
-        if (line.indexOf("[SUCCESS]") !== -1 || line.indexOf("[COMPLETE]") !== -1) cls = "log-line-success";
-        return '<span class="' + cls + '">' + esc(line) + '</span>';
+        if (line.indexOf("[ERROR]") !== -1)   cls = "log-err";
+        else if (line.indexOf("[SUCCESS]") !== -1 || line.indexOf("[COMPLETE]") !== -1) cls = "log-ok";
+        else if (line.indexOf("[WARNING]") !== -1) cls = "log-warn";
+        var escaped = esc(line).replace(/(\[[\dT:Z\-]+\])/g, '<span class="log-ts">$1</span>');
+        return cls ? '<span class="' + cls + '">' + escaped + '</span>' : escaped;
     }).join("\n");
     out.innerHTML = html;
     out.scrollTop = out.scrollHeight;
@@ -596,15 +638,11 @@ function updateProgress(pct, label) {
 }
 
 function showError(msg) {
-    var el = document.getElementById("error-msg");
-    el.textContent  = msg;
-    el.style.display = "block";
+    showToast("error", msg);
 }
 
 function clearError() {
-    var el = document.getElementById("error-msg");
-    el.style.display = "none";
-    el.style.color   = "#c9190b";
+    // No-op — errors are toasts now, they auto-dismiss
 }
 
 function esc(s) {
