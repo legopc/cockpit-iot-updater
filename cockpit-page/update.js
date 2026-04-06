@@ -92,10 +92,21 @@ function renderStatus(s) {
         applyBtn.style.display = "none";
         cancelBtn.style.display = s.stage === "uploading" ? "" : "none";
     } else if (s.stage === "error") {
-        applyBtn.style.display = "";
-        applyBtn.disabled = false;
-        applyBtn.textContent = "Retry Upload";
-        cancelBtn.style.display = "";
+        // If there's a ready bundle (version_info set before apply was triggered),
+        // allow retry. Otherwise reset the UI so the user can drop a new file.
+        if (versionPreview) {
+            applyBtn.style.display = "";
+            applyBtn.disabled = false;
+            applyBtn.textContent = "Retry Apply v" + versionPreview.version;
+        } else {
+            applyBtn.style.display = "none";
+            // Reset drop zone so user can select a new file without reloading
+            document.getElementById("dz-title").textContent = "Drop .iotupdate file here";
+            document.getElementById("dz-sub").textContent   = "or click to browse";
+            document.getElementById("file-input").value     = "";
+            selectedFile = null;
+        }
+        cancelBtn.style.display = "none";
     } else if (s.stage === "rebooting") {
         applyBtn.style.display = "none";
         cancelBtn.style.display = "none";

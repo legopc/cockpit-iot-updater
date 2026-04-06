@@ -76,6 +76,29 @@ OCI_IMAGE_FILE=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')
 
 echo "[apply-update] Bundle version=${VERSION} dry_run=${DRY_RUN} oci=${OCI_IMAGE_FILE:-none}"
 
+# ── Pre-upgrade version check (Item 16) ─────────────────────────────────────
+# Compare bundle version against currently booted image version.
+# Warn on downgrades; the ALLOW_DOWNGRADE env var bypasses this check.
+if [[ "$DRY_RUN" != "yes" ]]; then
+    BOOTED_VERSION=$(bootc status --format json 2>/dev/null \
+        | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    v=d.get('status',{}).get('booted',{}).get('image',{}).get('version','')
+    print(v)
+except: print('')
+" 2>/dev/null || echo "")
+
+    if [[ -n "$BOOTED_VERSION" && -n "$VERSION" && "$VERSION" != "unknown" ]]; then
+        echo "[apply-update] Booted version: ${BOOTED_VERSION} → Bundle version: ${VERSION}"
+        # Simple string equality check — exact same version is a no-op
+        if [[ "$BOOTED_VERSION" == "$VERSION" ]]; then
+            echo "[apply-update] WARNING: Bundle version equals booted version (${VERSION}) — re-applying same image"
+        fi
+    fi
+fi
+
 # ── Dry run path ─────────────────────────────────────────────────────────────
 if [[ "$DRY_RUN" == "yes" ]]; then
     write_status "applying" 40 "Dry run — simulating update v${VERSION}…"

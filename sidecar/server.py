@@ -97,7 +97,9 @@ def extract_version_from_bundle(bundle_path: Path) -> dict | None:
 
 def verify_bundle_hash(bundle_path: Path, version_info: dict) -> tuple[bool, str]:
     """
-    Extract image.tar from the bundle and verify its sha256 against version_info.
+    Stream image.tar from the bundle and verify its sha256 against version_info.
+    Uses pipe (streaming) mode so the full archive is never buffered in RAM —
+    critical for ~2 GB OCI bundles.
     Returns (ok, message).
     """
     expected = version_info.get("image_sha256", "")
@@ -108,16 +110,28 @@ def verify_bundle_hash(bundle_path: Path, version_info: dict) -> tuple[bool, str
 
     try:
         h = hashlib.sha256()
-        with tarfile.open(bundle_path, "r:") as tar:
-            member = tar.getmember(oci_file)
-            f = tar.extractfile(member)
-            if not f:
-                return False, f"Cannot extract {oci_file} from bundle"
-            while True:
-                chunk = f.read(4 * 1024 * 1024)
-                if not chunk:
+        found = False
+        # r| = streaming pipe mode: members are read sequentially, no seeking,
+        # no full-archive buffering. getmember() is not available in this mode;
+        # iterate with next() until we find the target file.
+        with tarfile.open(bundle_path, "r|") as tar:
+            for member in tar:
+                if member.name == oci_file:
+                    f = tar.extractfile(member)
+                    if not f:
+                        return False, f"Cannot extract {oci_file} from bundle"
+                    while True:
+                        chunk = f.read(4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                    found = True
                     break
-                h.update(chunk)
+                else:
+                    # Skip non-target members without extracting (advances stream position)
+                    tar.members = []
+        if not found:
+            return False, f"{oci_file} not found in bundle"
         actual = h.hexdigest()
         if actual != expected:
             return False, (
