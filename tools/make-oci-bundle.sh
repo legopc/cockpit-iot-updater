@@ -20,6 +20,7 @@ ARCHIVE=""
 IMAGE_NAME_OVERRIDE=""
 VERSION=""
 DESCRIPTION=""
+CHANGELOG=""
 OUT_FILE=""
 IMAGE_DIGEST=""
 HMAC_KEY=""
@@ -34,6 +35,7 @@ usage() {
     echo "               (useful with --archive when the image name is known)"
     echo "  --version    Version string, e.g. v9 (stored in version.json)"
     echo "  --description Human-readable change description"
+    echo "  --changelog  Optional change notes (stored in version.json, shown in UI)"
     echo "  --out        Output .iotupdate file path"
     echo "  --hmac-key   Secret key for HMAC-SHA256 bundle signing (writes .sig file)"
     exit 1
@@ -46,6 +48,7 @@ while [[ $# -gt 0 ]]; do
         --image-name)  IMAGE_NAME_OVERRIDE="$2"; shift 2 ;;
         --version)     VERSION="$2"; shift 2 ;;
         --description) DESCRIPTION="$2"; shift 2 ;;
+        --changelog)   CHANGELOG="$2"; shift 2 ;;
         --out)         OUT_FILE="$2"; shift 2 ;;
         --hmac-key)    HMAC_KEY="$2"; shift 2 ;;
         -h|--help)     usage ;;
@@ -140,8 +143,9 @@ echo "  sha256: ${IMAGE_SHA256}"
 # ── Write version.json ────────────────────────────────────────────────────────
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+CHANGELOG="${CHANGELOG}"
 python3 - <<PYEOF
-import json
+import json, os
 data = {
     "version": "${VERSION}",
     "build_date": "${BUILD_DATE}",
@@ -152,6 +156,9 @@ data = {
     "archive_format": "${ARCHIVE_FORMAT}",
     "image_digest": "${IMAGE_DIGEST}"
 }
+changelog = os.environ.get("CHANGELOG", "")
+if changelog:
+    data["changelog"] = changelog
 with open("${WORK_DIR}/version.json", "w") as f:
     json.dump(data, f, indent=2)
 print("version.json written:")
