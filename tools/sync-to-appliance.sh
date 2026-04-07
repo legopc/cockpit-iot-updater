@@ -13,14 +13,18 @@
 #
 # After running this, the appliance source will contain:
 #   iot-updater/
-#   ├── cockpit/
+#   ├── cockpit-page/
 #   │   ├── manifest.json
 #   │   ├── index.html
-#   │   └── update.js
-#   ├── server.py
-#   ├── apply-update.sh
-#   ├── iot-updater.service
-#   └── iot-update.service
+#   │   ├── update.js
+#   │   └── updater.css
+#   ├── sidecar/
+#   │   └── server.py
+#   ├── scripts/
+#   │   └── apply-update.sh
+#   └── systemd/
+#       ├── iot-updater.service
+#       └── iot-update.service
 #
 # The appliance Containerfile must reference these paths (see docs/DEPLOYMENT-V9.md).
 
@@ -60,40 +64,43 @@ echo "  Dest:   $DEST"
 echo ""
 
 # Create destination structure
-mkdir -p "$DEST/cockpit"
+mkdir -p "$DEST/cockpit-page"
+mkdir -p "$DEST/sidecar"
+mkdir -p "$DEST/scripts"
+mkdir -p "$DEST/systemd"
 
 # Cockpit page
-echo "  → cockpit/manifest.json"
-install -m 644 "$REPO_ROOT/cockpit-page/manifest.json" "$DEST/cockpit/manifest.json"
-echo "  → cockpit/index.html"
-install -m 644 "$REPO_ROOT/cockpit-page/index.html"    "$DEST/cockpit/index.html"
-echo "  → cockpit/update.js"
-install -m 644 "$REPO_ROOT/cockpit-page/update.js"     "$DEST/cockpit/update.js"
-echo "  → cockpit/updater.css"
-install -m 644 "$REPO_ROOT/cockpit-page/updater.css"   "$DEST/cockpit/updater.css"
+echo "  → cockpit-page/manifest.json"
+install -m 644 "$REPO_ROOT/cockpit-page/manifest.json" "$DEST/cockpit-page/manifest.json"
+echo "  → cockpit-page/index.html"
+install -m 644 "$REPO_ROOT/cockpit-page/index.html"    "$DEST/cockpit-page/index.html"
+echo "  → cockpit-page/update.js"
+install -m 644 "$REPO_ROOT/cockpit-page/update.js"     "$DEST/cockpit-page/update.js"
+echo "  → cockpit-page/updater.css"
+install -m 644 "$REPO_ROOT/cockpit-page/updater.css"   "$DEST/cockpit-page/updater.css"
 
 # Sidecar and apply script
-echo "  → server.py"
-install -m 755 "$REPO_ROOT/sidecar/server.py"          "$DEST/server.py"
-echo "  → apply-update.sh"
-install -m 755 "$REPO_ROOT/scripts/apply-update.sh"    "$DEST/apply-update.sh"
+echo "  → sidecar/server.py"
+install -m 755 "$REPO_ROOT/sidecar/server.py"          "$DEST/sidecar/server.py"
+echo "  → scripts/apply-update.sh"
+install -m 755 "$REPO_ROOT/scripts/apply-update.sh"    "$DEST/scripts/apply-update.sh"
 
 # Systemd units
-echo "  → iot-updater.service"
-install -m 644 "$REPO_ROOT/systemd/iot-updater.service" "$DEST/iot-updater.service"
-echo "  → iot-update.service"
-install -m 644 "$REPO_ROOT/systemd/iot-update.service"  "$DEST/iot-update.service"
+echo "  → systemd/iot-updater.service"
+install -m 644 "$REPO_ROOT/systemd/iot-updater.service" "$DEST/systemd/iot-updater.service"
+echo "  → systemd/iot-update.service"
+install -m 644 "$REPO_ROOT/systemd/iot-update.service"  "$DEST/systemd/iot-update.service"
 
 echo ""
 echo "✓ Sync complete."
 echo ""
 echo "Next steps:"
 echo "  1. Verify the Containerfile in $APPLIANCE_SRC includes:"
-echo "       COPY iot-updater/cockpit/  /usr/share/cockpit/iot-updater/"
-echo "       COPY iot-updater/server.py /var/lib/iot-updater/server.py"
-echo "       COPY iot-updater/apply-update.sh /var/lib/iot-updater/apply-update.sh"
-echo "       COPY iot-updater/iot-updater.service /etc/systemd/system/iot-updater.service"
-echo "       COPY iot-updater/iot-update.service  /etc/systemd/system/iot-update.service"
+echo "       COPY iot-updater/cockpit-page/  /usr/share/cockpit/iot-updater/"
+echo "       COPY iot-updater/sidecar/server.py /var/lib/iot-updater/server.py"
+echo "       COPY iot-updater/scripts/apply-update.sh /var/lib/iot-updater/apply-update.sh"
+echo "       COPY iot-updater/systemd/iot-updater.service /etc/systemd/system/iot-updater.service"
+echo "       COPY iot-updater/systemd/iot-update.service  /etc/systemd/system/iot-update.service"
 echo "       RUN chmod +x /var/lib/iot-updater/apply-update.sh && \\"
 echo "           systemctl enable iot-updater"
 echo ""
