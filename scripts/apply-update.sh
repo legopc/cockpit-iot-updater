@@ -104,6 +104,7 @@ log "INFO" "Disk preflight OK: ${AVAIL_KB} KB available in /var/tmp"
 
 # ── Extract version.json first (always small, first file in archive) ─────────
 write_status "applying" 8 "Reading bundle metadata…"
+mkdir -p "$WORK_DIR"
 tar -xf "$BUNDLE_PATH" -C "$WORK_DIR" version.json 2>/dev/null \
     || fail "Failed to extract version.json from bundle"
 [[ -f "$VERSION_JSON_PATH" ]] || fail "version.json not found in bundle"

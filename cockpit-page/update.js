@@ -68,15 +68,8 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     });
 
-    document.getElementById("log-toggle").addEventListener("click", function() {
-        logOpen = !logOpen;
-        var wrap = document.getElementById("log-body-wrap");
-        wrap.style.display = logOpen ? "block" : "none";
-        this.textContent = (logOpen ? "▼ Hide" : "▶ Show");
-        if (logOpen) loadLog(200);
-    });
     document.getElementById("log-refresh").addEventListener("click", function() {
-        if (logOpen) loadLog(200);
+        loadLog(200);
     });
 
     // Initial log load to show/hide the card based on /logs availability
@@ -171,7 +164,7 @@ function renderStatus(s) {
     if (s.stage === "idle") {
         applyBtn.style.display = "";
         applyBtn.disabled = !state.versionPreview || (isDowngrade() && !document.getElementById("allow-downgrade").checked);
-        if (state.versionPreview) applyBtn.textContent = state.versionPreview.dry_run ? "Apply v" + state.versionPreview.version + " (dry run)" : "Apply & Reboot v" + state.versionPreview.version;
+        if (state.versionPreview) applyBtn.textContent = state.versionPreview.dry_run ? "Apply v" + stripV(state.versionPreview.version) + " (dry run)" : "Apply & Reboot v" + stripV(state.versionPreview.version);
         cancelBtn.style.display = "none";
     } else if (isActive) {
         applyBtn.style.display = "none";
@@ -183,7 +176,7 @@ function renderStatus(s) {
             applyBtn.style.display = "";
             applyBtn.disabled = false;
             var isDry = state.versionPreview && state.versionPreview.dry_run;
-            applyBtn.textContent = (isDry ? "Retry Apply" : "Retry Apply & Reboot") + " v" + state.versionPreview.version;
+            applyBtn.textContent = (isDry ? "Retry Apply" : "Retry Apply & Reboot") + " v" + stripV(state.versionPreview.version);
         } else {
             applyBtn.style.display = "none";
             // Reset drop zone so user can select a new file without reloading
@@ -439,7 +432,7 @@ function showVersionPreview(info) {
     document.getElementById("downgrade-warning").style.display = isDowngrade() ? "block" : "none";
 
     var applyBtn = document.getElementById("btn-apply");
-    applyBtn.textContent = info.dry_run ? "Apply v" + info.version + " (dry run)" : "Apply & Reboot v" + info.version;
+    applyBtn.textContent = info.dry_run ? "Apply v" + stripV(info.version) + " (dry run)" : "Apply & Reboot v" + stripV(info.version);
     applyBtn.disabled    = isDowngrade() && !document.getElementById("allow-downgrade").checked;
 
     document.getElementById("dz-sub").textContent =
@@ -450,6 +443,8 @@ function isDowngrade() {
     if (!state.currentVersion || !state.versionPreview || !state.versionPreview.version) return false;
     return versionCompare(state.versionPreview.version, state.currentVersion) <= 0;
 }
+
+function stripV(v) { return v ? v.replace(/^v/i, "") : v; }
 
 function versionCompare(a, b) {
     // Strip leading "v", split on "-" to separate pre-release suffix, then compare numeric parts
@@ -597,7 +592,7 @@ function toggleSnippet(id) {
 }
 
 // ── Update Log viewer ─────────────────────────────────────────────────────────
-var logOpen = false;
+var logOpen = true;  // log is always open now
 
 function loadLog(lines) {
     lines = lines || 100;
