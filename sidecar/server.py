@@ -28,6 +28,7 @@ HISTORY_PATH = Path("/var/lib/iot-updater/history.json")
 LOG_PATH     = Path("/var/lib/iot-updater/update.log")
 STATUS_PATH  = Path("/run/iot-update-status.json")
 HISTORY_ARCHIVE_PATH = Path("/var/lib/iot-updater/history-archive.json")
+AUDIT_LOG_PATH = Path("/var/lib/iot-updater/audit.log")
 HISTORY_MAX_ENTRIES  = 100
 REQUIRED_DISK_BYTES  = 6 * 1024 ** 3  # 6 GB: bundle + extraction headroom
 FETCH_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB streaming chunks
@@ -59,6 +60,20 @@ def set_state(**kwargs):
 def get_state():
     with _state_lock:
         return dict(_state)
+
+
+def audit(endpoint: str, outcome: str, detail: str = ""):
+    """Append a single structured line to the audit log. Never raises."""
+    try:
+        AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        line = f"{ts} {endpoint} {outcome}"
+        if detail:
+            line += f" — {detail}"
+        with open(AUDIT_LOG_PATH, "a") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def read_external_status():
@@ -380,6 +395,26 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/health":
             self.send_json(200, {"ok": True, "service": "iot-updater", "stage": get_state()["stage"]})
 
+        elif self.path.startswith("/audit"):
+            lines_param = 100
+            if "?" in self.path:
+                qs = self.path.split("?", 1)[1]
+                for part in qs.split("&"):
+                    if part.startswith("lines="):
+                        try:
+                            lines_param = min(int(part[6:]), 1000)
+                        except ValueError:
+                            pass
+            try:
+                if AUDIT_LOG_PATH.exists():
+                    all_lines = AUDIT_LOG_PATH.read_text().splitlines()
+                    tail = all_lines[-lines_param:]
+                else:
+                    tail = []
+            except Exception:
+                tail = []
+            self.send_json(200, {"lines": tail, "path": str(AUDIT_LOG_PATH)})
+
         elif self.path == "/disk-space":
             usage = shutil.disk_usage("/var/tmp")
             self.send_json(200, {
@@ -405,6 +440,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             BUNDLE_READY_PATH.unlink(missing_ok=True)
             set_state(stage="idle", progress_pct=0, message="Upload cancelled.",
                       version_info=None, error=None)
+            audit("/upload/cancel", "ok")
             self.send_json(200, {"ok": True})
         elif self.path == "/rollback":
             self._handle_rollback()
@@ -431,6 +467,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         STATUS_PATH.unlink(missing_ok=True)
         set_state(stage="uploading", progress_pct=0, message="Upload started.",
                   version_info=None, error=None)
+        audit("/upload/start", "ok")
         self.send_json(200, {"ok": True})
 
     def _handle_upload(self):
@@ -481,6 +518,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             if not version_info or "error" in version_info:
                 err = (version_info or {}).get("error", "version.json missing or invalid")
                 set_state(stage="error", message=f"Bundle error: {err}", error=err)
+                audit("/upload", "error", err[:120])
                 self.send_json(422, {"error": err})
                 return
 
@@ -492,6 +530,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                 if not ok:
                     BUNDLE_PATH.unlink(missing_ok=True)
                     set_state(stage="error", message=result, error=result)
+                    audit("/upload", "error", result[:120])
                     self.send_json(422, {"error": result})
                     return
             else:
@@ -510,6 +549,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                 version_info=version_info,
                 error=None,
             )
+            audit("/upload", "complete", f"version={version_info.get('version','?')}")
 
         self.send_json(200, {"chunk": chunk_index, "progress": progress})
 
@@ -520,22 +560,26 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             return
         version_info = state["version_info"]
         threading.Thread(target=trigger_apply, args=(version_info,), daemon=True).start()
+        audit("/upload/apply", "ok", f"version={version_info.get('version','?')}")
         self.send_json(200, {"ok": True, "version": version_info.get("version")})
 
     def _handle_rollback(self):
         """Queue a bootc rollback and reboot."""
         state = get_state()
         if state["stage"] not in ("idle", "error"):
+            audit("/rollback", "rejected", f"stage={state['stage']}")
             self.send_json(409, {"error": f"Cannot rollback while in state: {state['stage']}"})
             return
 
         bs = get_bootc_status(force=True)
         if not bs.get("rollback"):
+            audit("/rollback", "rejected", "no rollback deployment available")
             self.send_json(409, {"error": "No rollback deployment available."})
             return
 
         rollback_image = bs["rollback"].get("image", "previous image")
         threading.Thread(target=do_rollback, daemon=True).start()
+        audit("/rollback", "ok", f"to={rollback_image[:80]}")
         self.send_json(200, {"ok": True, "rolling_back_to": rollback_image})
 
     def _handle_fetch_url(self):
@@ -581,6 +625,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                   message=f"Fetching bundle from URL…", version_info=None, error=None)
 
         # Respond immediately — download happens in background thread
+        audit("/fetch-url", "started", url[:120])
         self.send_json(200, {"ok": True, "url": url})
 
         threading.Thread(target=self._do_fetch_url, args=(url,), daemon=True).start()
@@ -608,11 +653,13 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         except urllib.error.URLError as e:
             err = f"Fetch failed: {e.reason}"
             BUNDLE_PATH.unlink(missing_ok=True)
+            audit("/fetch-url", "error", err[:120])
             set_state(stage="error", message=err, error=err)
             return
         except Exception as e:
             err = f"Fetch error: {e}"
             BUNDLE_PATH.unlink(missing_ok=True)
+            audit("/fetch-url", "error", err[:120])
             set_state(stage="error", message=err, error=err)
             return
 
@@ -639,6 +686,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             "bundle_path": str(BUNDLE_PATH),
             "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }))
+        audit("/fetch-url", "complete", f"version={version_info.get('version','?')}")
         set_state(
             stage="idle", progress_pct=100,
             message=f"Bundle ready: v{version_info.get('version', '?')}. Review and confirm to apply.",
