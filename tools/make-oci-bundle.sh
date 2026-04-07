@@ -24,34 +24,37 @@ CHANGELOG=""
 OUT_FILE=""
 IMAGE_DIGEST=""
 HMAC_KEY=""
+MANIFEST_URL=""
 
 usage() {
     echo "Usage: $0 --image IMAGE[:TAG] | --archive /path/to/image.tar"
     echo "          --version vN --description TEXT --out bundle.iotupdate"
     echo ""
-    echo "  --image      Podman image name+tag to export (uses 'podman save')"
-    echo "  --archive    Pre-exported OCI tar file (skips 'podman save')"
-    echo "  --image-name Override the oci_image_name stored in version.json"
-    echo "               (useful with --archive when the image name is known)"
-    echo "  --version    Version string, e.g. v9 (stored in version.json)"
-    echo "  --description Human-readable change description"
-    echo "  --changelog  Optional change notes (stored in version.json, shown in UI)"
-    echo "  --out        Output .iotupdate file path"
-    echo "  --hmac-key   Secret key for HMAC-SHA256 bundle signing (writes .sig file)"
+    echo "  --image         Podman image name+tag to export (uses 'podman save')"
+    echo "  --archive       Pre-exported OCI tar file (skips 'podman save')"
+    echo "  --image-name    Override the oci_image_name stored in version.json"
+    echo "                  (useful with --archive when the image name is known)"
+    echo "  --version       Version string, e.g. v9 (stored in version.json)"
+    echo "  --description   Human-readable change description"
+    echo "  --changelog     Optional change notes (stored in version.json, shown in UI)"
+    echo "  --out           Output .iotupdate file path"
+    echo "  --hmac-key      Secret key for HMAC-SHA256 bundle signing (writes .sig file)"
+    echo "  --manifest-url  URL of the JSON manifest for auto-update checks (written to version.json)"
     exit 1
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --image)       IMAGE="$2"; shift 2 ;;
-        --archive)     ARCHIVE="$2"; shift 2 ;;
-        --image-name)  IMAGE_NAME_OVERRIDE="$2"; shift 2 ;;
-        --version)     VERSION="$2"; shift 2 ;;
-        --description) DESCRIPTION="$2"; shift 2 ;;
-        --changelog)   CHANGELOG="$2"; shift 2 ;;
-        --out)         OUT_FILE="$2"; shift 2 ;;
-        --hmac-key)    HMAC_KEY="$2"; shift 2 ;;
-        -h|--help)     usage ;;
+        --image)         IMAGE="$2"; shift 2 ;;
+        --archive)       ARCHIVE="$2"; shift 2 ;;
+        --image-name)    IMAGE_NAME_OVERRIDE="$2"; shift 2 ;;
+        --version)       VERSION="$2"; shift 2 ;;
+        --description)   DESCRIPTION="$2"; shift 2 ;;
+        --changelog)     CHANGELOG="$2"; shift 2 ;;
+        --out)           OUT_FILE="$2"; shift 2 ;;
+        --hmac-key)      HMAC_KEY="$2"; shift 2 ;;
+        --manifest-url)  MANIFEST_URL="$2"; shift 2 ;;
+        -h|--help)       usage ;;
         *) echo "Unknown argument: $1"; usage ;;
     esac
 done
@@ -144,9 +147,10 @@ echo "  sha256: ${IMAGE_SHA256}"
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 CHANGELOG="${CHANGELOG}"
-python3 - <<PYEOF
+MANIFEST_URL_VAL="${MANIFEST_URL}" python3 - <<PYEOF
 import json, os
 data = {
+    "bundle_type": "full",
     "version": "${VERSION}",
     "build_date": "${BUILD_DATE}",
     "description": "${DESCRIPTION}",
@@ -159,6 +163,9 @@ data = {
 changelog = os.environ.get("CHANGELOG", "")
 if changelog:
     data["changelog"] = changelog
+manifest_url = os.environ.get("MANIFEST_URL_VAL", "")
+if manifest_url:
+    data["manifest_url"] = manifest_url
 with open("${WORK_DIR}/version.json", "w") as f:
     json.dump(data, f, indent=2)
 print("version.json written:")

@@ -134,6 +134,12 @@ PYEOF
 )"
 log "INFO" "Bundle metadata: version=${VERSION} dry_run=${DRY_RUN} oci=${OCI_IMAGE_FILE:-none}"
 
+# ── Delta bundle detection (not yet supported) ────────────────────────────────
+BUNDLE_TYPE=$(python3 -c "import json,sys; d=json.load(open('$WORK_DIR/version.json')); print(d.get('bundle_type','full'))" 2>/dev/null || echo "full")
+if [ "$BUNDLE_TYPE" = "delta" ]; then
+  fail "Delta bundles are not yet supported. Use a full bundle."
+fi
+
 # Security: ensure oci_image_file is a plain filename (no path traversal)
 if [[ -n "$OCI_IMAGE_FILE" ]]; then
     [[ "$OCI_IMAGE_FILE" == */* ]] && fail "oci_image_file contains path separator — refusing to extract"

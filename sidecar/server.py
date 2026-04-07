@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 LISTEN_HOST = "127.0.0.1"
@@ -29,6 +30,7 @@ LOG_PATH     = Path("/var/lib/iot-updater/update.log")
 STATUS_PATH  = Path("/run/iot-update-status.json")
 HISTORY_ARCHIVE_PATH = Path("/var/lib/iot-updater/history-archive.json")
 AUDIT_LOG_PATH = Path("/var/lib/iot-updater/audit.log")
+MANIFEST_CONFIG_PATH = Path("/var/lib/iot-updater/manifest.json")
 HISTORY_MAX_ENTRIES  = 100
 REQUIRED_DISK_BYTES  = 6 * 1024 ** 3  # 6 GB: bundle + extraction headroom
 FETCH_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB streaming chunks
@@ -48,6 +50,24 @@ _last_state_change = _started_at
 # Cached bootc status
 _bootc_cache = {"data": None, "ts": 0}
 _bootc_lock  = threading.Lock()
+
+# Per-endpoint rate limiting (in-memory, resets on restart)
+_rate_limits: dict[str, list] = {}
+_rate_lock = threading.Lock()
+
+
+def _check_rate_limit(endpoint: str, max_requests: int, window_seconds: float) -> bool:
+    """Return True if the request is allowed, False if rate limited."""
+    now = time.monotonic()
+    with _rate_lock:
+        timestamps = _rate_limits.setdefault(endpoint, [])
+        # Prune timestamps outside the window
+        cutoff = now - window_seconds
+        _rate_limits[endpoint] = [t for t in timestamps if t > cutoff]
+        if len(_rate_limits[endpoint]) >= max_requests:
+            return False
+        _rate_limits[endpoint].append(now)
+        return True
 
 
 def set_state(**kwargs):
@@ -134,8 +154,37 @@ def rotate_log(max_lines: int = 500):
         pass
 
 
-def extract_version_from_bundle(bundle_path: Path) -> dict | None:
-    """Pull version.json out of the .iotupdate tar without extracting the full image."""
+def load_manifest_config() -> dict:
+    """Read manifest config from MANIFEST_CONFIG_PATH, return {} if missing/invalid."""
+    try:
+        if MANIFEST_CONFIG_PATH.exists():
+            return json.loads(MANIFEST_CONFIG_PATH.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def save_manifest_config(cfg: dict):
+    """Write manifest config to MANIFEST_CONFIG_PATH, creating parent dirs as needed."""
+    MANIFEST_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MANIFEST_CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+
+
+def maybe_capture_manifest_url(version_info: dict):
+    """If version_info contains manifest_url and no URL is configured yet, save it."""
+    manifest_url = version_info.get("manifest_url", "").strip()
+    if not manifest_url:
+        return
+    cfg = load_manifest_config()
+    if not cfg.get("url"):
+        cfg.setdefault("check_interval_hours", 24)
+        cfg.setdefault("last_checked", None)
+        cfg.setdefault("last_seen_version", None)
+        cfg["url"] = manifest_url
+        save_manifest_config(cfg)
+
+
+def extract_version_from_bundle(bundle_path: Path) -> dict | None:    """Pull version.json out of the .iotupdate tar without extracting the full image."""
     try:
         with tarfile.open(bundle_path, "r:") as tar:
             member = tar.getmember("version.json")
@@ -367,7 +416,13 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/version-preview":
             state = get_state()
             if state.get("version_info"):
-                self.send_json(200, state["version_info"])
+                info = dict(state["version_info"])
+                bundle_type = info.get("bundle_type", "full")
+                info["bundle_type"] = bundle_type
+                if bundle_type == "delta":
+                    info["base_version"] = info.get("base_version", "")
+                    info["base_sha256"] = info.get("base_sha256", "")
+                self.send_json(200, info)
             else:
                 self.send_json(404, {"error": "No bundle uploaded yet."})
 
@@ -424,6 +479,46 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                 "required_gb": round(REQUIRED_DISK_BYTES / 1024 ** 3, 1),
                 "ok": usage.free >= REQUIRED_DISK_BYTES
             })
+
+        elif self.path == "/manifest-config":
+            self.send_json(200, load_manifest_config())
+
+        elif self.path == "/check-update":
+            cfg = load_manifest_config()
+            url = cfg.get("url", "").strip()
+            if not url:
+                self.send_json(200, {"available": False, "reason": "no manifest configured"})
+                return
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "cockpit-iot-updater/1.0", "Accept": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    manifest = json.loads(resp.read().decode())
+            except Exception as e:
+                self.send_json(200, {"available": False, "error": str(e)})
+                return
+            history = load_history()
+            if not history:
+                self.send_json(200, {"available": False, "reason": "no current version"})
+                return
+            current_version = history[-1].get("version", "")
+            manifest_version = manifest.get("version", "")
+            # Update last_checked and last_seen_version
+            cfg["last_checked"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            cfg["last_seen_version"] = manifest_version
+            save_manifest_config(cfg)
+            if manifest_version and manifest_version != current_version:
+                self.send_json(200, {
+                    "available": True,
+                    "version":     manifest_version,
+                    "bundle_url":  manifest.get("bundle_url", ""),
+                    "description": manifest.get("description", ""),
+                    "build_date":  manifest.get("build_date", ""),
+                })
+            else:
+                self.send_json(200, {"available": False})
 
         else:
             self.send_json(404, {"error": "Not found."})
