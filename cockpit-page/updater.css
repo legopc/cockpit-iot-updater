@@ -23,6 +23,25 @@ body {
 .pill-dot.orange { background: #ec7a08; }
 .pill-dot.red { background: #c9190b; }
 
+/* ── Update-available banner (J-B) ───────────────────────────────────────────── */
+.update-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    background: #e7f3fb;
+    border-bottom: 2px solid #2b9af3;
+    font-size: 0.88rem;
+    color: #151515;
+    border-radius: 0;
+}
+.update-banner-icon { font-size: 1.1rem; flex-shrink: 0; }
+.update-banner span[id="update-banner-msg"] { flex: 1; }
+.update-banner .pf-v5-c-button.pf-m-primary { background: #0066cc; color: #fff; border: none; border-radius: 4px; padding: 4px 12px; font-size: 0.82rem; cursor: pointer; }
+.update-banner .pf-v5-c-button.pf-m-primary:hover { background: #004d99; }
+.update-banner .pf-v5-c-button.pf-m-plain { background: transparent; border: none; color: #6a6e73; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+.update-banner .pf-v5-c-button.pf-m-plain:hover { color: #151515; background: #d2d2d2; }
+
 /* ── Layout ──────────────────────────────────────────────────────────────────── */
 .page-body { padding: 18px 24px; max-width: 1200px; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -273,6 +292,9 @@ button.btn { min-height: 44px; }
     .progress-bar-wrap { background: #45475a; }
     .info-table code { background: #313244; }
     .hash-display { color: #cdd6f4; }
+    .update-banner { background: #1a2d3a; border-color: #2b9af3; color: #c8c9ca; }
+    .update-banner .pf-v5-c-button.pf-m-plain { color: #89b4fa; }
+    .update-banner .pf-v5-c-button.pf-m-plain:hover { background: #313244; color: #cdd6f4; }
 }
 
 /* ── History timeline dots (K-D) ─────────────────────────────────────────────── */

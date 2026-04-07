@@ -184,7 +184,8 @@ def maybe_capture_manifest_url(version_info: dict):
         save_manifest_config(cfg)
 
 
-def extract_version_from_bundle(bundle_path: Path) -> dict | None:    """Pull version.json out of the .iotupdate tar without extracting the full image."""
+def extract_version_from_bundle(bundle_path: Path) -> dict | None:
+    """Pull version.json out of the .iotupdate tar without extracting the full image."""
     try:
         with tarfile.open(bundle_path, "r:") as tar:
             member = tar.getmember("version.json")
@@ -413,6 +414,42 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             age = round(time.time() - _bootc_cache["ts"], 1) if _bootc_cache["ts"] else None
             self.send_json(200, {**data, "cache_age_seconds": age})
 
+        elif self.path == "/check-update":
+            cfg = load_manifest_config()
+            url = cfg.get("url", "").strip()
+            if not url:
+                self.send_json(200, {"available": False, "reason": "no manifest configured"})
+                return
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "cockpit-iot-updater/1.0", "Accept": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    manifest = json.loads(resp.read().decode())
+            except Exception as e:
+                self.send_json(200, {"available": False, "error": str(e)})
+                return
+            history = load_history()
+            if not history:
+                self.send_json(200, {"available": False, "reason": "no current version"})
+                return
+            current_version = history[-1].get("version", "")
+            manifest_version = manifest.get("version", "")
+            cfg["last_checked"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            cfg["last_seen_version"] = manifest_version
+            save_manifest_config(cfg)
+            if manifest_version and manifest_version != current_version:
+                self.send_json(200, {
+                    "available": True,
+                    "version":     manifest_version,
+                    "bundle_url":  manifest.get("bundle_url", ""),
+                    "description": manifest.get("description", ""),
+                    "build_date":  manifest.get("build_date", ""),
+                })
+            else:
+                self.send_json(200, {"available": False})
+
         elif self.path == "/version-preview":
             state = get_state()
             if state.get("version_info"):
@@ -422,6 +459,23 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                 if bundle_type == "delta":
                     info["base_version"] = info.get("base_version", "")
                     info["base_sha256"] = info.get("base_sha256", "")
+                valid_until = info.get("valid_until")
+                if valid_until:
+                    try:
+                        expiry_dt = datetime.fromisoformat(valid_until)
+                        if expiry_dt.tzinfo is None:
+                            expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+                        now_utc = datetime.now(timezone.utc)
+                        if now_utc > expiry_dt:
+                            self.send_json(409, {
+                                "error": "Bundle has expired",
+                                "expired": True,
+                                "valid_until": valid_until,
+                            })
+                            return
+                        info["days_remaining"] = (expiry_dt.date() - now_utc.date()).days
+                    except (ValueError, TypeError):
+                        pass
                 self.send_json(200, info)
             else:
                 self.send_json(404, {"error": "No bundle uploaded yet."})
@@ -483,43 +537,6 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/manifest-config":
             self.send_json(200, load_manifest_config())
 
-        elif self.path == "/check-update":
-            cfg = load_manifest_config()
-            url = cfg.get("url", "").strip()
-            if not url:
-                self.send_json(200, {"available": False, "reason": "no manifest configured"})
-                return
-            try:
-                req = urllib.request.Request(
-                    url,
-                    headers={"User-Agent": "cockpit-iot-updater/1.0", "Accept": "application/json"}
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    manifest = json.loads(resp.read().decode())
-            except Exception as e:
-                self.send_json(200, {"available": False, "error": str(e)})
-                return
-            history = load_history()
-            if not history:
-                self.send_json(200, {"available": False, "reason": "no current version"})
-                return
-            current_version = history[-1].get("version", "")
-            manifest_version = manifest.get("version", "")
-            # Update last_checked and last_seen_version
-            cfg["last_checked"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            cfg["last_seen_version"] = manifest_version
-            save_manifest_config(cfg)
-            if manifest_version and manifest_version != current_version:
-                self.send_json(200, {
-                    "available": True,
-                    "version":     manifest_version,
-                    "bundle_url":  manifest.get("bundle_url", ""),
-                    "description": manifest.get("description", ""),
-                    "build_date":  manifest.get("build_date", ""),
-                })
-            else:
-                self.send_json(200, {"available": False})
-
         else:
             self.send_json(404, {"error": "Not found."})
 
@@ -541,10 +558,39 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             self._handle_rollback()
         elif self.path == "/fetch-url":
             self._handle_fetch_url()
+        elif self.path == "/manifest-config":
+            self._handle_manifest_config()
         else:
             self.send_json(404, {"error": "Not found."})
 
+    def _handle_manifest_config(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self.send_json(400, {"error": "Empty request body."})
+            return
+        try:
+            payload = json.loads(self.rfile.read(content_length))
+        except Exception:
+            self.send_json(400, {"error": "Invalid JSON body."})
+            return
+        url = payload.get("url", "").strip()
+        if not url:
+            self.send_json(400, {"error": "Missing 'url' field."})
+            return
+        cfg = load_manifest_config()
+        cfg["url"] = url
+        cfg["check_interval_hours"] = int(payload.get("check_interval_hours", cfg.get("check_interval_hours", 24)))
+        cfg.setdefault("last_checked", None)
+        cfg.setdefault("last_seen_version", None)
+        save_manifest_config(cfg)
+        audit("/manifest-config", "ok", url[:120])
+        self.send_json(200, {"ok": True})
+
     def _handle_upload_start(self):
+        if not _check_rate_limit("/upload/start", 10, 60):
+            audit("rate_limited", "/upload/start")
+            self.send_json(429, {"error": "Rate limit exceeded. Try again later."})
+            return
         state = get_state()
         if state["stage"] not in ("idle", "error"):
             self.send_json(409, {"error": f"Cannot start upload in state: {state['stage']}"})
@@ -637,6 +683,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                 "bundle_path": str(BUNDLE_PATH),
                 "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }))
+            maybe_capture_manifest_url(version_info)
             set_state(
                 stage="idle",
                 progress_pct=100,
@@ -649,6 +696,10 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         self.send_json(200, {"chunk": chunk_index, "progress": progress})
 
     def _handle_apply(self):
+        if not _check_rate_limit("/upload/apply", 5, 60):
+            audit("rate_limited", "/upload/apply")
+            self.send_json(429, {"error": "Rate limit exceeded. Try again later."})
+            return
         state = get_state()
         if state["stage"] != "idle" or state.get("version_info") is None:
             self.send_json(409, {"error": "No ready bundle to apply."})
@@ -660,6 +711,10 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_rollback(self):
         """Queue a bootc rollback and reboot."""
+        if not _check_rate_limit("/rollback", 3, 60):
+            audit("rate_limited", "/rollback")
+            self.send_json(429, {"error": "Rate limit exceeded. Try again later."})
+            return
         state = get_state()
         if state["stage"] not in ("idle", "error"):
             audit("/rollback", "rejected", f"stage={state['stage']}")
@@ -678,6 +733,10 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True, "rolling_back_to": rollback_image})
 
     def _handle_fetch_url(self):
+        if not _check_rate_limit("/fetch-url", 5, 60):
+            audit("rate_limited", "/fetch-url")
+            self.send_json(429, {"error": "Rate limit exceeded. Try again later."})
+            return
         state = get_state()
         if state["stage"] not in ("idle", "error"):
             self.send_json(409, {"error": f"Cannot fetch URL in state: {state['stage']}"})
@@ -781,6 +840,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             "bundle_path": str(BUNDLE_PATH),
             "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }))
+        maybe_capture_manifest_url(version_info)
         audit("/fetch-url", "complete", f"version={version_info.get('version','?')}")
         set_state(
             stage="idle", progress_pct=100,

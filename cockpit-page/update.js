@@ -81,6 +81,17 @@ document.addEventListener("DOMContentLoaded", function() {
 
     loadDiskSpace();
 
+    // J-A/J-B: manifest config and auto-update check
+    document.getElementById("btn-save-manifest").addEventListener("click", saveManifestConfig);
+    document.getElementById("btn-check-update").addEventListener("click", function() { checkForUpdate(true); });
+    document.getElementById("update-banner-dismiss").addEventListener("click", dismissUpdateBanner);
+    document.getElementById("update-banner-btn").addEventListener("click", function() {
+        var applyCard = document.querySelector(".two-col .card:last-child");
+        if (applyCard) applyCard.scrollIntoView({ behavior: "smooth" });
+    });
+    loadManifestConfig();
+    checkForUpdate(false);
+
     window.addEventListener("beforeunload", function() {
         if (state.statusPoller) clearTimeout(state.statusPoller);
         if (state.bootcPoller)  clearTimeout(state.bootcPoller);
@@ -803,4 +814,80 @@ function fetchFromUrl() {
             errEl.textContent = msg || "Fetch failed.";
             errEl.style.display = "block";
         });
+}
+
+// ── Manifest config + auto-update check (J-A/J-B) ────────────────────────────
+function loadManifestConfig() {
+    api.get("/manifest-config")
+        .then(function(text) {
+            var cfg = JSON.parse(text);
+            if (cfg.url) {
+                document.getElementById("manifest-url-input").value = cfg.url;
+            }
+            _updateLastCheckedDisplay(cfg.last_checked);
+        })
+        .catch(function() {});
+}
+
+function saveManifestConfig() {
+    var url = (document.getElementById("manifest-url-input").value || "").trim();
+    if (!url) { showToast("error", "Enter a manifest URL first."); return; }
+    var btn = document.getElementById("btn-save-manifest");
+    btn.disabled = true;
+    api.request({
+        method: "POST", path: "/manifest-config",
+        body: JSON.stringify({ url: url, check_interval_hours: 24 }),
+        headers: { "Content-Type": "application/json" }
+    })
+    .then(function() {
+        btn.disabled = false;
+        showToast("success", "Manifest URL saved.");
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        var msg = "";
+        try { msg = JSON.parse(err.message || "{}").error || err.message; } catch(e) { msg = String(err); }
+        showToast("error", "Save failed: " + (msg || String(err)));
+    });
+}
+
+function checkForUpdate(manual) {
+    api.get("/check-update")
+        .then(function(text) {
+            var r = JSON.parse(text);
+            _updateLastCheckedDisplay(null); // will refresh via loadManifestConfig
+            loadManifestConfig();
+            if (r.available) {
+                var msg = "v" + esc(r.version) + " is available";
+                if (r.description) msg += " — " + esc(r.description);
+                document.getElementById("update-banner-msg").innerHTML = "🔔 " + msg;
+                if (r.bundle_url) {
+                    document.getElementById("update-banner-btn").onclick = function() {
+                        document.getElementById("fetch-url-input").value = r.bundle_url;
+                        var applyCard = document.querySelector(".two-col");
+                        if (applyCard) applyCard.scrollIntoView({ behavior: "smooth" });
+                    };
+                }
+                document.getElementById("update-available-banner").style.display = "flex";
+            } else {
+                if (manual) {
+                    showToast("success", "Up to date" + (r.reason ? " (" + r.reason + ")" : "") + ".");
+                }
+            }
+        })
+        .catch(function() {});
+}
+
+function dismissUpdateBanner() {
+    document.getElementById("update-available-banner").style.display = "none";
+}
+
+function _updateLastCheckedDisplay(ts) {
+    var el = document.getElementById("manifest-last-checked");
+    if (!el) return;
+    if (ts) {
+        el.textContent = "Last checked: " + new Date(ts).toLocaleString();
+    } else {
+        el.textContent = "";
+    }
 }

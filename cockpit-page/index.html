@@ -9,6 +9,14 @@
 
 <div id="toast-area"></div>
 
+<!-- Update available banner -->
+<div id="update-available-banner" class="update-banner" style="display:none">
+  <span class="update-banner-icon">🔔</span>
+  <span id="update-banner-msg">A new version is available.</span>
+  <button id="update-banner-btn" class="pf-v5-c-button pf-m-primary pf-m-small">View</button>
+  <button id="update-banner-dismiss" class="pf-v5-c-button pf-m-plain">✕</button>
+</div>
+
 <!-- Header -->
 <div class="page-header">
   <div class="page-header-left">
@@ -112,6 +120,18 @@
           <div id="fetch-url-error" style="font-size:0.78rem;color:#c9190b;margin-top:4px;display:none"></div>
         </div>
 
+        <!-- Manifest / Auto-update (J-A/J-B) -->
+        <div id="manifest-section" style="margin-top:14px">
+          <div style="font-size:0.78rem;color:#6a6e73;margin-bottom:6px;font-weight:600">— Manifest / Auto-update —</div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+            <input type="url" id="manifest-url-input" placeholder="https://builds.example.com/latest.json"
+                   style="flex:1;padding:6px 10px;border:1px solid #d2d2d2;border-radius:4px;font-size:0.85rem;font-family:inherit">
+            <button class="btn btn-secondary btn-sm" id="btn-save-manifest" style="white-space:nowrap">💾 Save</button>
+            <button class="btn btn-secondary btn-sm" id="btn-check-update" style="white-space:nowrap">🔍 Check now</button>
+          </div>
+          <div id="manifest-last-checked" style="font-size:0.76rem;color:#6a6e73"></div>
+        </div>
+
         <div id="version-preview" style="display:none">
           <table class="info-table" style="margin-top:4px">
             <tr><td class="info-key">Version</td><td id="pv-version">—</td></tr>
@@ -121,6 +141,10 @@
             <tr id="pv-hash-row" style="display:none">
               <td class="info-key">SHA256</td>
               <td id="pv-hash" class="hash-display" title="">—</td>
+            </tr>
+            <tr id="pv-expiry-row" style="display:none">
+              <td class="info-key">Expires</td>
+              <td><span id="bundle-expiry">—</span></td>
             </tr>
             <tr id="pv-changelog-row" style="display:none">
               <td class="info-key" style="vertical-align:top">Changes</td>

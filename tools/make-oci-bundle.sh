@@ -24,6 +24,7 @@ CHANGELOG=""
 OUT_FILE=""
 IMAGE_DIGEST=""
 HMAC_KEY=""
+VALID_DAYS=""
 MANIFEST_URL=""
 
 usage() {
@@ -40,6 +41,7 @@ usage() {
     echo "  --out           Output .iotupdate file path"
     echo "  --hmac-key      Secret key for HMAC-SHA256 bundle signing (writes .sig file)"
     echo "  --manifest-url  URL of the JSON manifest for auto-update checks (written to version.json)"
+    echo "  --valid-days N  Bundle expiry: N days from today (writes valid_until to version.json)"
     exit 1
 }
 
@@ -54,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --out)           OUT_FILE="$2"; shift 2 ;;
         --hmac-key)      HMAC_KEY="$2"; shift 2 ;;
         --manifest-url)  MANIFEST_URL="$2"; shift 2 ;;
+        --valid-days)    VALID_DAYS="$2"; shift 2 ;;
         -h|--help)       usage ;;
         *) echo "Unknown argument: $1"; usage ;;
     esac
@@ -146,8 +149,20 @@ echo "  sha256: ${IMAGE_SHA256}"
 # ── Write version.json ────────────────────────────────────────────────────────
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+# Compute expiry date if --valid-days was given
+VALID_UNTIL=""
+if [[ -n "$VALID_DAYS" ]]; then
+    # Support both GNU date (-d) and BSD/macOS date (-v)
+    if date -d "+${VALID_DAYS} days" +%Y-%m-%d &>/dev/null 2>&1; then
+        VALID_UNTIL=$(date -d "+${VALID_DAYS} days" +%Y-%m-%d)
+    else
+        VALID_UNTIL=$(date -v+${VALID_DAYS}d +%Y-%m-%d)
+    fi
+    echo "  Bundle expires: ${VALID_UNTIL} (${VALID_DAYS} days from today)"
+fi
+
 CHANGELOG="${CHANGELOG}"
-MANIFEST_URL_VAL="${MANIFEST_URL}" python3 - <<PYEOF
+MANIFEST_URL_VAL="${MANIFEST_URL}" VALID_UNTIL_VAL="${VALID_UNTIL}" python3 - <<PYEOF
 import json, os
 data = {
     "bundle_type": "full",
@@ -166,6 +181,9 @@ if changelog:
 manifest_url = os.environ.get("MANIFEST_URL_VAL", "")
 if manifest_url:
     data["manifest_url"] = manifest_url
+valid_until = os.environ.get("VALID_UNTIL_VAL", "")
+if valid_until:
+    data["valid_until"] = valid_until
 with open("${WORK_DIR}/version.json", "w") as f:
     json.dump(data, f, indent=2)
 print("version.json written:")
