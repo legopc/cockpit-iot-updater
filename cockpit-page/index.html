@@ -12,7 +12,10 @@
 <!-- Header -->
 <div class="page-header">
   <div class="page-header-left">
-    <span style="font-size:1.5rem;line-height:1">🔄</span>
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#89b4fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      <polyline points="8 12 11 15 16 10"/>
+    </svg>
     <div>
       <div class="page-title-row">
         <span class="page-title">IoT Updater</span>
@@ -77,6 +80,16 @@
       <div class="card-body">
         <div id="sidecar-warn" style="display:none">⚠ Cannot reach updater sidecar. Run: <code>sudo systemctl start iot-updater</code></div>
 
+        <!-- Disk space indicator (H-E) -->
+        <div id="disk-space-widget" style="margin-bottom:10px;display:none">
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <span style="font-size:0.78rem;font-weight:600;color:#6a6e73">Disk space</span>
+            <span id="disk-avail-label" class="disk-info" style="font-size:0.78rem"></span>
+          </div>
+          <div class="disk-bar-wrap"><div class="disk-bar-fill ok" id="disk-bar-fill" style="width:0%"></div></div>
+          <div id="disk-warn-msg" style="font-size:0.76rem;color:#c9190b;display:none;margin-top:2px"></div>
+        </div>
+
         <div id="drop-zone">
           <input type="file" id="file-input" accept=".iotupdate">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#0066cc" stroke-width="1.5">
@@ -88,6 +101,17 @@
           <p id="dz-sub">or click to browse</p>
         </div>
 
+        <!-- URL fetch alternative (H-B) -->
+        <div id="url-fetch-section" style="margin-top:10px">
+          <div style="font-size:0.78rem;color:#6a6e73;margin-bottom:6px;font-weight:600">— or fetch from URL —</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="url" id="fetch-url-input" placeholder="https://builds.example.com/v14.iotupdate"
+                   style="flex:1;padding:6px 10px;border:1px solid #d2d2d2;border-radius:4px;font-size:0.85rem;font-family:inherit">
+            <button class="btn btn-secondary btn-sm" id="btn-fetch-url" style="white-space:nowrap">⬇ Fetch</button>
+          </div>
+          <div id="fetch-url-error" style="font-size:0.78rem;color:#c9190b;margin-top:4px;display:none"></div>
+        </div>
+
         <div id="version-preview" style="display:none">
           <table class="info-table" style="margin-top:4px">
             <tr><td class="info-key">Version</td><td id="pv-version">—</td></tr>
@@ -97,6 +121,10 @@
             <tr id="pv-hash-row" style="display:none">
               <td class="info-key">SHA256</td>
               <td id="pv-hash" class="hash-display" title="">—</td>
+            </tr>
+            <tr id="pv-changelog-row" style="display:none">
+              <td class="info-key" style="vertical-align:top">Changes</td>
+              <td id="pv-changelog" style="white-space:pre-wrap;font-size:0.83rem;line-height:1.5">—</td>
             </tr>
           </table>
         </div>
@@ -113,6 +141,7 @@
         <div id="progress-area" style="display:none;margin-top:12px">
           <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-fill"></div></div>
           <div id="progress-label" style="font-size:0.82rem;color:#6a6e73;margin-top:4px">0%</div>
+          <div class="speed-label" id="speed-label"></div>
         </div>
 
         <div style="margin-top:14px" class="btn-group">

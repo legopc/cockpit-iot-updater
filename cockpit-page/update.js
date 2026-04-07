@@ -17,6 +17,8 @@ var state = {
     statusPoller:   null,
     bootcPoller:    null,
     sidecarOk:      false,
+    uploadStartTime: null,
+    uploadedBytes:   0,
 };
 
 function resetState() {
@@ -74,6 +76,10 @@ document.addEventListener("DOMContentLoaded", function() {
 
     // Initial log load to show/hide the card based on /logs availability
     loadLog();
+
+    document.getElementById("btn-fetch-url").addEventListener("click", fetchFromUrl);
+
+    loadDiskSpace();
 
     window.addEventListener("beforeunload", function() {
         if (state.statusPoller) clearTimeout(state.statusPoller);
@@ -224,6 +230,12 @@ function setBadge(stage, label) {
     if (dot && txt) {
         txt.textContent = label;
         dot.className = "pill-dot " + (stage === "error" ? "red" : stage === "idle" ? "green" : stage === "rebooting" ? "orange" : "blue");
+        var activeStagesForDot = ["uploading", "extracting", "verifying", "queued", "applying", "rebooting"];
+        if (activeStagesForDot.indexOf(stage) !== -1) {
+            dot.classList.add("animating");
+        } else {
+            dot.classList.remove("animating");
+        }
     }
 }
 
@@ -327,6 +339,7 @@ function handleFileSelected(file) {
     }
     state.selectedFile = file;
     clearError();
+    loadDiskSpace();
     document.getElementById("dz-title").textContent = file.name;
     document.getElementById("dz-sub").textContent =
         (file.size / 1024 / 1024).toFixed(1) + " MB — uploading…";
@@ -341,9 +354,13 @@ function uploadAndPreview(file) {
     api.request({ method: "POST", path: "/upload/start", body: "" })
         .then(function() {
             document.getElementById("progress-area").style.display = "block";
+            state.uploadStartTime = Date.now();
+            state.uploadedBytes   = 0;
             return sendChunks(file, totalChunks, 0);
         })
         .then(function() {
+            var speedEl = document.getElementById("speed-label");
+            if (speedEl) { speedEl.className = "speed-label"; speedEl.textContent = ""; }
             return api.get("/status");
         })
         .then(function(text) {
@@ -401,6 +418,21 @@ function sendChunks(file, totalChunks, index) {
                     var pct = Math.round(((index + 1) / totalChunks) * 100);
                     updateProgress(pct, "Uploading… " + pct + "%");
                 }
+                state.uploadedBytes += chunk.size;
+                var elapsed = (Date.now() - state.uploadStartTime) / 1000;
+                if (elapsed > 1) {
+                    var mbps = (state.uploadedBytes / 1048576) / elapsed;
+                    var remaining = file.size - state.uploadedBytes;
+                    var etaSec = remaining / (state.uploadedBytes / elapsed);
+                    var etaStr = etaSec > 60
+                        ? Math.floor(etaSec / 60) + "m " + Math.round(etaSec % 60) + "s"
+                        : Math.round(etaSec) + "s";
+                    var speedEl = document.getElementById("speed-label");
+                    if (speedEl && !isLast) {
+                        speedEl.className = "speed-label visible";
+                        speedEl.textContent = "⬆ " + mbps.toFixed(1) + " MB/s  ~" + etaStr + " remaining";
+                    }
+                }
                 resolve();
             })
             .catch(reject);
@@ -426,6 +458,16 @@ function showVersionPreview(info) {
         hashEl.textContent = info.image_sha256.substring(0, 16) + "…";
         hashEl.title       = info.image_sha256;
         hashRow.style.display = "";
+    }
+
+    var clRow = document.getElementById("pv-changelog-row");
+    var clEl  = document.getElementById("pv-changelog");
+    if (info.changelog && clRow && clEl) {
+        var cl = Array.isArray(info.changelog) ? info.changelog.join("\n") : String(info.changelog);
+        clEl.textContent = cl;
+        clRow.style.display = "";
+    } else if (clRow) {
+        clRow.style.display = "none";
     }
 
     document.getElementById("version-preview").style.display = "block";
@@ -467,20 +509,23 @@ function versionCompare(a, b) {
 // ── Apply / Cancel ────────────────────────────────────────────────────────────
 function applyUpdate() {
     if (!state.versionPreview) return;
-    var msg = "Apply update " + state.versionPreview.version + "?";
-    if (!state.versionPreview.dry_run) msg += "\n\nThe device will reboot after the update is applied.";
-    if (!confirm(msg)) return;
-
-    var applyBtn = document.getElementById("btn-apply");
-    applyBtn.disabled = true;
-    applyBtn.textContent = "Applying…";
-
-    api.request({ method: "POST", path: "/upload/apply", body: "" })
-        .catch(function(err) {
-            applyBtn.disabled = false;
-            applyBtn.textContent = "Retry Apply " + state.versionPreview.version;
-            showError("Failed to trigger update: " + (err.message || err.problem || String(err)));
-        });
+    showConfirmModal(
+        "Apply Update " + state.versionPreview.version + "?",
+        state.versionPreview.dry_run
+            ? "This is a dry run — no actual changes will be made."
+            : "The device will reboot after the update is applied. Make sure no critical processes are running.",
+        function() {
+            var applyBtn = document.getElementById("btn-apply");
+            applyBtn.disabled = true;
+            applyBtn.textContent = "Applying…";
+            api.request({ method: "POST", path: "/upload/apply", body: "" })
+                .catch(function(err) {
+                    applyBtn.disabled = false;
+                    applyBtn.textContent = "Retry Apply " + state.versionPreview.version;
+                    showError("Failed to trigger update: " + (err.message || err.problem || String(err)));
+                });
+        }
+    );
 }
 
 function cancelUpload() {
@@ -652,4 +697,84 @@ function copyHash(hash) {
     if (navigator.clipboard) {
         navigator.clipboard.writeText(hash).catch(function() {});
     }
+}
+
+// ── Disk space widget (H-E) ───────────────────────────────────────────────────
+function loadDiskSpace() {
+    api.get("/disk-space")
+        .then(function(text) {
+            var d = JSON.parse(text);
+            var widget = document.getElementById("disk-space-widget");
+            var fill   = document.getElementById("disk-bar-fill");
+            var label  = document.getElementById("disk-avail-label");
+            var warn   = document.getElementById("disk-warn-msg");
+            widget.style.display = "block";
+            var pct = Math.min(Math.round((d.available_gb / (d.required_gb * 2)) * 100), 100);
+            fill.style.width = pct + "%";
+            fill.className = "disk-bar-fill " + (d.ok ? (pct > 60 ? "ok" : "warn") : "danger");
+            label.textContent = d.available_gb + " GB free";
+            label.className = "disk-info" + (d.ok ? "" : " danger");
+            if (!d.ok) {
+                warn.style.display = "block";
+                warn.textContent = "⚠ Need " + d.required_gb + " GB — free up space before uploading.";
+            } else {
+                warn.style.display = "none";
+            }
+        })
+        .catch(function() {}); // silently ignore if endpoint not available
+}
+
+// ── Confirm modal (H-C) ───────────────────────────────────────────────────────
+function showConfirmModal(title, body, onConfirm) {
+    var overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML =
+        '<div class="modal-box">' +
+            '<div class="modal-title">' + esc(title) + '</div>' +
+            '<div class="modal-body">' + esc(body) + '</div>' +
+            '<div class="modal-actions">' +
+                '<button class="btn btn-secondary" id="modal-cancel">Cancel</button>' +
+                '<button class="btn btn-primary" id="modal-confirm">Confirm</button>' +
+            '</div>' +
+        '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector("#modal-cancel").addEventListener("click", function() { overlay.remove(); });
+    overlay.querySelector("#modal-confirm").addEventListener("click", function() {
+        overlay.remove();
+        onConfirm();
+    });
+    overlay.addEventListener("click", function(e) { if (e.target === overlay) overlay.remove(); });
+}
+
+// ── URL fetch (H-B) ──────────────────────────────────────────────────────────
+function fetchFromUrl() {
+    var url = (document.getElementById("fetch-url-input").value || "").trim();
+    var errEl = document.getElementById("fetch-url-error");
+    errEl.style.display = "none";
+
+    if (!url) { errEl.textContent = "Enter a URL."; errEl.style.display = "block"; return; }
+    if (!url.endsWith(".iotupdate")) {
+        errEl.textContent = "URL must end with .iotupdate"; errEl.style.display = "block"; return;
+    }
+
+    var btn = document.getElementById("btn-fetch-url");
+    btn.disabled = true;
+    btn.textContent = "Fetching…";
+
+    api.request({ method: "POST", path: "/fetch-url", body: JSON.stringify({ url: url }),
+                  headers: { "Content-Type": "application/json" } })
+        .then(function() {
+            btn.textContent = "⬇ Fetch";
+            btn.disabled = false;
+            document.getElementById("progress-area").style.display = "block";
+            showToast("info", "Fetching bundle from URL… check progress bar.");
+        })
+        .catch(function(err) {
+            btn.textContent = "⬇ Fetch";
+            btn.disabled = false;
+            var msg = "";
+            try { msg = JSON.parse(err.message || "{}").error || err.message; } catch(e) { msg = String(err); }
+            errEl.textContent = msg || "Fetch failed.";
+            errEl.style.display = "block";
+        });
 }
