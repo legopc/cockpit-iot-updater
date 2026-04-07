@@ -113,7 +113,7 @@ document.addEventListener("DOMContentLoaded", async function() {
         if (state.statusPoller) clearTimeout(state.statusPoller);
         if (state.bootcPoller)  clearTimeout(state.bootcPoller);
         if (rebootCountdown)    clearInterval(rebootCountdown);
-        try { api.request({ method: "POST", path: "/upload/cancel", body: "" }); } catch(e) {}
+        try { api.request({ method: "POST", path: "/upload/cancel", body: "", headers: authHeaders() }); } catch(e) {}
     });
 });
 
@@ -379,7 +379,7 @@ function uploadAndPreview(file) {
     resetState();
     var totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-    api.request({ method: "POST", path: "/upload/start", body: "" })
+    api.request({ method: "POST", path: "/upload/start", body: "", headers: authHeaders() })
         .then(function() {
             document.getElementById("progress-area").style.display = "block";
             state.uploadStartTime = Date.now();
@@ -448,11 +448,11 @@ function sendChunks(file, totalChunks, index) {
             uploadApi.request({
                 method: "POST",
                 path: "/upload",
-                headers: {
+                headers: authHeaders({
                     "Content-Type": "application/octet-stream",
                     "X-Chunk-Index": String(index),
                     "X-Total-Chunks": String(totalChunks)
-                },
+                }),
                 body: buffer
             })
             .then(function(respBytes) {
@@ -594,7 +594,7 @@ function applyUpdate() {
             var applyBtn = document.getElementById("btn-apply");
             applyBtn.disabled = true;
             applyBtn.textContent = "Applying…";
-            api.request({ method: "POST", path: "/upload/apply", body: "" })
+            api.request({ method: "POST", path: "/upload/apply", body: "", headers: authHeaders() })
                 .catch(function(err) {
                     applyBtn.disabled = false;
                     applyBtn.textContent = "Retry Apply " + state.versionPreview.version;
@@ -605,7 +605,7 @@ function applyUpdate() {
 }
 
 function cancelUpload() {
-    api.request({ method: "POST", path: "/upload/cancel", body: "" })
+    api.request({ method: "POST", path: "/upload/cancel", body: "", headers: authHeaders() })
         .then(function() {
             resetState();
             document.getElementById("version-preview").style.display  = "none";
@@ -632,7 +632,7 @@ function doRollback() {
     btn.disabled = true;
     btn.textContent = "Rolling back…";
 
-    api.request({ method: "POST", path: "/rollback", body: "" })
+    api.request({ method: "POST", path: "/rollback", body: "", headers: authHeaders() })
         .then(function(text) {
             var r = JSON.parse(text);
             setBadge("rebooting", "Rolling back…");
@@ -862,7 +862,7 @@ function fetchFromUrl() {
     btn.textContent = "Fetching…";
 
     api.request({ method: "POST", path: "/fetch-url", body: JSON.stringify({ url: url }),
-                  headers: { "Content-Type": "application/json" } })
+                  headers: authHeaders({ "Content-Type": "application/json" }) })
         .then(function() {
             btn.textContent = "⬇ Fetch";
             btn.disabled = false;
@@ -900,7 +900,7 @@ function saveManifestConfig() {
     api.request({
         method: "POST", path: "/manifest-config",
         body: JSON.stringify({ url: url, check_interval_hours: 24 }),
-        headers: { "Content-Type": "application/json" }
+        headers: authHeaders({ "Content-Type": "application/json" })
     })
     .then(function() {
         btn.disabled = false;
