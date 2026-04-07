@@ -57,19 +57,38 @@ tools/make-oci-bundle.sh \
 
 ## Step 4: (Optional) Create delta bundle
 
-Only viable for minor updates. Requires base image tar from previous build.
+Only viable for minor updates (typically ~50 KB vs 2 GB full bundle). Requires the
+base image to be present in podman's image store on the build host.
+
+> **IMPORTANT:** Run as root (`sudo`) on COPILOT-BUILD-01. The Inferno build pipeline
+> loads images via `sudo podman`, so they live in root's containers-storage. The script
+> must also run as root so `podman save` can export them. The apply-update.sh script
+> on the appliance also runs as root and uses `podman save --format docker-archive`
+> to export the base for sha256 comparison — both ends must produce the same bytes.
 
 ```bash
-tools/make-delta-bundle.sh \
+# Using images already in root's containers-storage:
+sudo tools/make-delta-bundle.sh \
+  --base-image localhost/inferno-appliance:v(N-1) \
+  --target-image localhost/inferno-appliance:vN \
+  --base-version v(N-1) \
+  --version vN \
+  --image-name localhost/inferno-appliance:vN \
+  --description "Delta: v(N-1) to vN" \
+  --out inferno-v(N-1)-to-vN.delta.iotupdate
+
+# Or using pre-existing .tar archives (must be docker-archive format):
+sudo tools/make-delta-bundle.sh \
   --base-archive inferno-appliance-v(N-1).tar \
   --target-archive inferno-appliance-vN.tar \
   --base-version v(N-1) \
   --version vN \
+  --image-name localhost/inferno-appliance:vN \
   --description "Delta: v(N-1) to vN" \
   --out inferno-v(N-1)-to-vN.delta.iotupdate
 ```
 
-Build host requirements: bsdiff installed, ~8 GB free disk, ~6 GB free RAM.
+Build host requirements: bsdiff installed, ~8 GB free disk, ~6 GB free RAM, run as root.
 
 ## Step 5: Distribute
 
