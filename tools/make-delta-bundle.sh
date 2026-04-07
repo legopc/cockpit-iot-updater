@@ -123,32 +123,17 @@ detect_format() {
     fi
 }
 
-# ── Get base image tar ────────────────────────────────────────────────────────
-if [[ -n "$BASE_IMAGE" ]]; then
-    echo "Exporting base podman image: ${BASE_IMAGE}"
-    echo "  (This may take a few minutes for a large image…)"
-    podman save --format oci-archive "${BASE_IMAGE}" -o "${BASE_TAR}" || {
-        echo "ERROR: podman save failed for base image '${BASE_IMAGE}'"
-        exit 1
-    }
-    echo "  Base exported: $(du -sh "${BASE_TAR}" | cut -f1)"
-else
-    [[ -f "$BASE_ARCHIVE" ]] || { echo "ERROR: Base archive not found: $BASE_ARCHIVE"; exit 1; }
-    echo "Using base archive: $BASE_ARCHIVE ($(du -sh "$BASE_ARCHIVE" | cut -f1))"
-    cp "$BASE_ARCHIVE" "$BASE_TAR"
-fi
-
-echo "Validating base archive…"
-tar -tf "${BASE_TAR}" > /dev/null 2>&1 || { echo "ERROR: Base archive is not a valid tar"; exit 1; }
-echo "  Base format: $(detect_format "$BASE_TAR")"
-
 # ── Get target image tar ──────────────────────────────────────────────────────
+# Target is processed first so we know ARCHIVE_FORMAT before normalising the base.
 if [[ -n "$TARGET_IMAGE" ]]; then
-    echo "Exporting target podman image: ${TARGET_IMAGE}"
+    echo "Exporting target image from containers-storage: ${TARGET_IMAGE}"
     echo "  (This may take a few minutes for a large image…)"
-    podman save --format oci-archive "${TARGET_IMAGE}" -o "${TARGET_TAR}" || {
-        echo "ERROR: podman save failed for target image '${TARGET_IMAGE}'"
-        exit 1
+    skopeo copy "containers-storage:${TARGET_IMAGE}" "oci-archive:${TARGET_TAR}" || {
+        # Fallback: try podman save
+        podman save --format oci-archive "${TARGET_IMAGE}" -o "${TARGET_TAR}" || {
+            echo "ERROR: Failed to export target image '${TARGET_IMAGE}'"
+            exit 1
+        }
     }
     echo "  Target exported: $(du -sh "${TARGET_TAR}" | cut -f1)"
 else
@@ -161,6 +146,58 @@ echo "Validating target archive…"
 tar -tf "${TARGET_TAR}" > /dev/null 2>&1 || { echo "ERROR: Target archive is not a valid tar"; exit 1; }
 ARCHIVE_FORMAT=$(detect_format "$TARGET_TAR")
 echo "  Target format: ${ARCHIVE_FORMAT}"
+
+# ── Get base image tar (must be normalized through containers-storage) ─────────
+# CRITICAL: apply-update.sh exports the booted image via:
+#   skopeo copy containers-storage:IMAGE <format>-archive:base-export.tar
+# The base_sha256 we store MUST match the sha256 of that export.
+# We therefore always route --base-archive through containers-storage so both
+# the build host and the appliance produce identical byte streams.
+BASE_TEMP_TAG="localhost/delta-build-base-$(date +%s):temp"
+BASE_TEMP_LOADED=0
+
+if [[ -n "$BASE_IMAGE" ]]; then
+    echo "Using base image from containers-storage: ${BASE_IMAGE}"
+    BASE_CS_IMAGE="$BASE_IMAGE"
+else
+    [[ -f "$BASE_ARCHIVE" ]] || { echo "ERROR: Base archive not found: $BASE_ARCHIVE"; exit 1; }
+    echo "Loading base archive into containers-storage for normalisation: $BASE_ARCHIVE"
+    echo "  (This ensures base_sha256 matches what apply-update.sh will compute on the appliance)"
+    RAW_FORMAT=$(detect_format "$BASE_ARCHIVE")
+    if [[ "$RAW_FORMAT" == "oci" ]]; then
+        LOAD_SRC="oci-archive:${BASE_ARCHIVE}"
+    else
+        LOAD_SRC="docker-archive:${BASE_ARCHIVE}"
+    fi
+    skopeo copy "$LOAD_SRC" "containers-storage:${BASE_TEMP_TAG}" || {
+        echo "ERROR: Failed to load base archive into containers-storage"
+        exit 1
+    }
+    BASE_CS_IMAGE="$BASE_TEMP_TAG"
+    BASE_TEMP_LOADED=1
+fi
+
+echo "Exporting base image from containers-storage (same method as apply-update.sh)…"
+echo "  (This may take a few minutes for a large image…)"
+if [[ "$ARCHIVE_FORMAT" == "docker" ]]; then
+    skopeo copy "containers-storage:${BASE_CS_IMAGE}" "docker-archive:${BASE_TAR}" || {
+        echo "ERROR: Failed to export base image from containers-storage"; exit 1
+    }
+else
+    skopeo copy "containers-storage:${BASE_CS_IMAGE}" "oci-archive:${BASE_TAR}" || {
+        echo "ERROR: Failed to export base image from containers-storage"; exit 1
+    }
+fi
+echo "  Base exported: $(du -sh "${BASE_TAR}" | cut -f1)"
+
+# Cleanup temp containers-storage entry
+if [[ "$BASE_TEMP_LOADED" == "1" ]]; then
+    podman rmi "$BASE_TEMP_TAG" 2>/dev/null || true
+fi
+
+echo "Validating base archive…"
+tar -tf "${BASE_TAR}" > /dev/null 2>&1 || { echo "ERROR: Base archive is not a valid tar"; exit 1; }
+echo "  Base format: $(detect_format "$BASE_TAR")"
 
 # Determine oci_image_name
 if [[ -n "$IMAGE_NAME_OVERRIDE" ]]; then
