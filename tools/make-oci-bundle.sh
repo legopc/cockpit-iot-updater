@@ -26,6 +26,7 @@ IMAGE_DIGEST=""
 HMAC_KEY=""
 VALID_DAYS=""
 MANIFEST_URL=""
+SIGN_KEY=""
 
 usage() {
     echo "Usage: $0 --image IMAGE[:TAG] | --archive /path/to/image.tar"
@@ -39,7 +40,7 @@ usage() {
     echo "  --description   Human-readable change description"
     echo "  --changelog     Optional change notes (stored in version.json, shown in UI)"
     echo "  --out           Output .iotupdate file path"
-    echo "  --hmac-key      Secret key for HMAC-SHA256 bundle signing (writes .sig file)"
+    echo "  --sign-key      Path to Ed25519 private key for signing version.json (optional)"
     echo "  --manifest-url  URL of the JSON manifest for auto-update checks (written to version.json)"
     echo "  --valid-days N  Bundle expiry: N days from today (writes valid_until to version.json)"
     exit 1
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --changelog)     CHANGELOG="$2"; shift 2 ;;
         --out)           OUT_FILE="$2"; shift 2 ;;
         --hmac-key)      HMAC_KEY="$2"; shift 2 ;;
+        --sign-key)      SIGN_KEY="$2"; shift 2 ;;
         --manifest-url)  MANIFEST_URL="$2"; shift 2 ;;
         --valid-days)    VALID_DAYS="$2"; shift 2 ;;
         -h|--help)       usage ;;
@@ -189,6 +191,25 @@ with open("${WORK_DIR}/version.json", "w") as f:
 print("version.json written:")
 print(json.dumps(data, indent=2))
 PYEOF
+
+# ── Ed25519 signing ───────────────────────────────────────────────────────────
+if [[ -n "$SIGN_KEY" ]]; then
+    [[ -f "$SIGN_KEY" ]] || { echo "ERROR: --sign-key file not found: $SIGN_KEY"; exit 1; }
+    echo "Signing version.json with Ed25519 key: ${SIGN_KEY}"
+    openssl dgst -sha256 -sign "$SIGN_KEY" -out "${WORK_DIR}/bundle.sig" "${WORK_DIR}/version.json" \
+        || { echo "ERROR: openssl signing failed"; exit 1; }
+    SIG=$(base64 -w0 "${WORK_DIR}/bundle.sig")
+    python3 - <<SIGEOF
+import json
+path = "${WORK_DIR}/version.json"
+d = json.load(open(path))
+d["signature"] = "${SIG}"
+d["signed_fields"] = ["version.json"]
+json.dump(d, open(path, "w"), indent=2)
+SIGEOF
+    rm -f "${WORK_DIR}/bundle.sig"
+    echo "  Signature embedded in version.json"
+fi
 
 # ── Package into .iotupdate ───────────────────────────────────────────────────
 echo ""

@@ -11,6 +11,7 @@ import hashlib
 import http.server
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import tarfile
@@ -23,6 +24,7 @@ from pathlib import Path
 
 LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 8088
+SESSION_TOKEN = secrets.token_hex(32)
 BUNDLE_PATH       = Path("/var/tmp/iot43-update.iotupdate")
 BUNDLE_READY_PATH = Path("/var/lib/iot-updater/bundle-ready")
 HISTORY_PATH = Path("/var/lib/iot-updater/history.json")
@@ -385,22 +387,44 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", "127.0.0.1")
         self.end_headers()
         self.wfile.write(body)
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", "127.0.0.1")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers",
-                         "Content-Type, X-Chunk-Index, X-Total-Chunks, X-Filename")
+                         "Content-Type, X-Session-Token, X-Chunk-Index, X-Total-Chunks, X-Filename")
+        self.send_header("Access-Control-Max-Age", "3600")
         self.end_headers()
 
+    def _check_origin(self) -> bool:
+        """Return True if Origin is acceptable, False (and send 403) if not."""
+        origin = self.headers.get("Origin", "")
+        if origin and origin not in ("null", "127.0.0.1", ""):
+            self.send_json(403, {"error": "Forbidden"})
+            return False
+        return True
+
+    def _check_session_token(self) -> bool:
+        """Return True if X-Session-Token is valid, False (and send 403) if not."""
+        token = self.headers.get("X-Session-Token", "")
+        if not token or token != SESSION_TOKEN:
+            self.send_json(403, {"error": "Invalid or missing session token"})
+            return False
+        return True
+
     def do_GET(self):
+        if not self._check_origin():
+            return
         read_external_status()
 
-        if self.path == "/status":
+        if self.path == "/session-token":
+            self.send_json(200, {"token": SESSION_TOKEN})
+
+        elif self.path == "/status":
             s = get_state()
             s["started_at"] = _started_at
             s["last_update_at"] = _last_state_change
@@ -456,6 +480,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                 info = dict(state["version_info"])
                 bundle_type = info.get("bundle_type", "full")
                 info["bundle_type"] = bundle_type
+                info["signed"] = "signature" in info
                 if bundle_type == "delta":
                     info["base_version"] = info.get("base_version", "")
                     info["base_sha256"] = info.get("base_sha256", "")
@@ -541,6 +566,10 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Not found."})
 
     def do_POST(self):
+        if not self._check_origin():
+            return
+        if not self._check_session_token():
+            return
         if self.path == "/upload":
             self._handle_upload()
         elif self.path == "/upload/start":

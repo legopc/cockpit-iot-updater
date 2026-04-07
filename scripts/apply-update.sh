@@ -134,6 +134,46 @@ PYEOF
 )"
 log "INFO" "Bundle metadata: version=${VERSION} dry_run=${DRY_RUN} oci=${OCI_IMAGE_FILE:-none}"
 
+# ── Ed25519 signature verification ───────────────────────────────────────────
+PUBLIC_KEY_PATH="/etc/iot-updater/signing.pub"
+ENFORCE_SIGNING="${IOT_UPDATER_ENFORCE_SIGNING:-0}"
+
+if [ -f "$PUBLIC_KEY_PATH" ]; then
+  SIG=$(python3 -c "import json,sys; print(json.load(open('$WORK_DIR/version.json')).get('signature',''))" 2>/dev/null)
+  if [ -n "$SIG" ]; then
+    python3 -c "
+import json, base64, sys
+d = json.load(open('$WORK_DIR/version.json'))
+sig_b64 = d.pop('signature', '')
+d.pop('signed_fields', None)
+json.dump(d, open('$WORK_DIR/version.json.verify', 'w'), indent=2)
+with open('$WORK_DIR/bundle.sig.tmp', 'wb') as f:
+    f.write(base64.b64decode(sig_b64))
+"
+    if openssl dgst -sha256 -verify "$PUBLIC_KEY_PATH" \
+        -signature "$WORK_DIR/bundle.sig.tmp" \
+        "$WORK_DIR/version.json.verify" 2>/dev/null; then
+      log "INFO" "Bundle signature verified OK"
+    else
+      if [ "$ENFORCE_SIGNING" = "1" ]; then
+        rm -f "$WORK_DIR/bundle.sig.tmp" "$WORK_DIR/version.json.verify"
+        fail "Bundle signature verification FAILED"
+      else
+        log "WARNING" "Bundle signature verification failed (enforcement disabled)"
+      fi
+    fi
+    rm -f "$WORK_DIR/bundle.sig.tmp" "$WORK_DIR/version.json.verify"
+  else
+    if [ "$ENFORCE_SIGNING" = "1" ]; then
+      fail "Bundle is unsigned but signing is enforced"
+    else
+      log "INFO" "Bundle is unsigned (signing not enforced)"
+    fi
+  fi
+else
+  log "INFO" "No public key at $PUBLIC_KEY_PATH — skipping signature verification"
+fi
+
 # ── Delta bundle detection (not yet supported) ────────────────────────────────
 BUNDLE_TYPE=$(python3 -c "import json,sys; d=json.load(open('$WORK_DIR/version.json')); print(d.get('bundle_type','full'))" 2>/dev/null || echo "full")
 if [ "$BUNDLE_TYPE" = "delta" ]; then

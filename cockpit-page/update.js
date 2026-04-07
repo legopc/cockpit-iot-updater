@@ -19,7 +19,23 @@ var state = {
     sidecarOk:      false,
     uploadStartTime: null,
     uploadedBytes:   0,
+    sessionToken:    null,
 };
+
+async function initSessionToken() {
+    try {
+        var text = await api.get("/session-token");
+        state.sessionToken = JSON.parse(text).token;
+    } catch(e) {
+        console.warn("Failed to fetch session token:", e);
+    }
+}
+
+function authHeaders(extraHeaders) {
+    var h = { "X-Session-Token": state.sessionToken };
+    if (extraHeaders) Object.assign(h, extraHeaders);
+    return h;
+}
 
 function resetState() {
     state.selectedFile   = null;
@@ -48,7 +64,8 @@ var rebootCountdown = null;
 var _prevStage = null;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener("DOMContentLoaded", function() {
+document.addEventListener("DOMContentLoaded", async function() {
+    await initSessionToken();
     pollStatus();
     pollBootcStatus();
     loadHistory();
@@ -480,6 +497,18 @@ function showVersionPreview(info) {
     document.getElementById("pv-desc").textContent    = info.description || "—";
     document.getElementById("pv-type").textContent    = info.dry_run
         ? "🧪 Dry run (no actual update)" : "Production";
+
+    // Signed/unsigned badge
+    var signedBadge = document.getElementById("bundle-signed-badge");
+    if (signedBadge) {
+        if (info.signed === true) {
+            signedBadge.textContent = "✅ Signed";
+            signedBadge.title = "Bundle contains a valid Ed25519 signature";
+        } else {
+            signedBadge.textContent = "⚠️ Unsigned";
+            signedBadge.title = "Bundle has no Ed25519 signature";
+        }
+    }
 
     // SHA256 display
     if (info.image_sha256) {
