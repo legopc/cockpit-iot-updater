@@ -8,10 +8,18 @@ A Cockpit web UI page for delivering and applying ~2 GB OCI container image upda
 - **Chunked upload** — streams 2 GB bundles in 8 MB chunks; no browser memory issues
 - **Version preview** — reads `version.json` from the bundle before committing the upload
 - **SHA-256 integrity** — bundle hash is computed at build time and verified server-side before apply
+- **Verifying progress** — progress bar pulses with label while server-side hash check runs
 - **bootc status panel** — shows booted / staged / rollback deployment info from `bootc status`
 - **One-click rollback** — rolls back to the previous deployment slot via `bootc rollback`
-- **Update history** — timestamped log of all updates applied through the UI
+- **Update history** — timestamped log of all updates applied through the UI (capped at 100 entries)
+- **Persistent update log** — `/var/lib/iot-updater/update.log` survives reboots; exposed via `GET /logs`
+- **Log viewer** — collapsible log card in the UI; inline log snippets on failed history entries
 - **Sidecar API** — lightweight Python stdlib HTTP server; no external dependencies
+- **Health endpoint** — `GET /health` for monitoring/readiness checks
+- **Toast notifications** — slide-in alerts for errors and success events; no blocking dialogs
+- **Reboot reconnect** — detects device reboot and shows a countdown with auto page-refresh
+- **Dark mode** — full `prefers-color-scheme: dark` support (Catppuccin Mocha palette)
+- **Touch-friendly** — all buttons meet WCAG 2.1 AA 44px touch target minimum
 
 ## How it works
 
@@ -122,14 +130,16 @@ cockpit-iot-updater/
 │   └── apply-update.sh            ← sha256 verify + skopeo + bootc switch + reboot
 ├── cockpit-page/
 │   ├── manifest.json              ← Cockpit plugin registration
-│   ├── index.html                 ← Upload, status, rollback UI
-│   └── update.js                  ← Chunked upload, bootc status polling, rollback
+│   ├── index.html                 ← Upload, status, rollback UI (two-col inferno-style layout)
+│   ├── updater.css                ← All page styles (inferno design language, dark mode)
+│   └── update.js                  ← Chunked upload, bootc status polling, rollback, toasts
 ├── systemd/
-│   ├── iot-updater.service        ← Persistent sidecar (always running)
+│   ├── iot-updater.service        ← Persistent sidecar (always running, hardened sandbox)
 │   └── iot-update.service         ← Oneshot update apply (started on demand)
 ├── tools/
-│   ├── make-oci-bundle.sh         ← Packages podman image into .iotupdate
+│   ├── make-oci-bundle.sh         ← Packages podman image into .iotupdate (with HMAC signing)
 │   └── sync-to-appliance.sh      ← Copies updater files into appliance source repo
+├── IMPROVEMENTS.md                ← Improvement backlog with completion status (43/46 done)
 └── docs/
     ├── ARCHITECTURE.md            ← Technical reference: state machine, endpoints, file locations
     ├── BUNDLING.md                ← Bundle format reference (→ BUILDING-UPDATES.md for guide)

@@ -54,7 +54,22 @@
 | L-16 | A | ✅ Done |
 | L-17 | A | ✅ Done |
 
-**43 of 46 items done.** Remaining: C-3 (auth — Phase F deferred), C-4 (won't fix), M-15.
+**44 of 46 original items done** + Phase G UI redesign complete. Remaining from original backlog: C-3 (auth — Phase F deferred), C-4 (won't fix), M-15.
+
+### Phase G — UI Redesign (completed)
+
+| Item | Status |
+|------|--------|
+| Two-column layout (Deployment \| Apply side by side) | ✅ Done |
+| Inferno card style (border-radius 8px, box-shadow, card-header/body) | ✅ Done |
+| Dark `#1b1d21` header with version pill + service status dot | ✅ Done |
+| Toast notification system (replaces inline error div) | ✅ Done |
+| Catppuccin Mocha log box (`#1e1e2e`, log-ok/err/warn/ts colors) | ✅ Done |
+| Extract CSS to `updater.css` | ✅ Done |
+| Inferno button system (hover states, btn-secondary, orange warning) | ✅ Done |
+| Compact drop zone (20px padding, reduced height) | ✅ Done |
+| Info-table style for deployment panel | ✅ Done |
+| Dark mode — Catppuccin Mocha palette | ✅ Done |
 
 ---
 

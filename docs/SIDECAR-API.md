@@ -5,6 +5,36 @@ All endpoints are accessed via `cockpit.http(8088)` from the browser — never d
 
 ---
 
+## Endpoint summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Service health check |
+| GET | `/status` | Current upload/apply state |
+| GET | `/history` | Update history log |
+| GET | `/bootc-status` | Booted/staged/rollback deployment info |
+| GET | `/version-preview` | Parsed version.json of uploaded bundle |
+| GET | `/logs` | Tail of persistent update log |
+| POST | `/upload/start` | Begin upload session |
+| POST | `/upload` | Send one chunk |
+| POST | `/upload/apply` | Confirm and apply bundle |
+| POST | `/upload/cancel` | Abort/clear |
+| POST | `/rollback` | Rollback to previous deployment |
+
+---
+
+## GET /health
+
+Returns service liveness. Always returns 200 if the sidecar is running.
+
+**Response: 200 OK**
+
+```json
+{ "ok": true, "service": "iot-updater", "stage": "idle" }
+```
+
+---
+
 ## GET /status
 
 Returns the current upload/apply state and progress information.
@@ -13,10 +43,13 @@ Returns the current upload/apply state and progress information.
 
 ```json
 {
-  "stage":    "idle",
-  "progress": 0,
-  "message":  "",
-  "error":    null
+  "stage":          "idle",
+  "progress_pct":   0,
+  "message":        "Ready for upload.",
+  "version_info":   null,
+  "error":          null,
+  "started_at":     "2026-04-06T23:18:32Z",
+  "last_update_at": "2026-04-06T23:18:32Z"
 }
 ```
 
@@ -24,11 +57,13 @@ Returns the current upload/apply state and progress information.
 
 | Stage | Meaning |
 |-------|---------|
-| `idle` | No upload or apply in progress |
+| `idle` | Ready for upload (or bundle ready to apply) |
 | `uploading` | Bundle is being received in chunks |
-| `verifying` | SHA-256 being verified, version.json being parsed |
-| `staged` | Bundle received and verified; awaiting user confirmation to apply |
+| `extracting` | Reading version.json from bundle |
+| `verifying` | SHA-256 being verified server-side |
+| `queued` | Apply confirmed, handing off to iot-update.service |
 | `applying` | `iot-update.service` is running (skopeo + bootc switch) |
+| `rebooting` | Apply done, system is rebooting |
 | `error` | An unrecoverable error occurred (see `error` field) |
 
 ### Fields
@@ -36,80 +71,90 @@ Returns the current upload/apply state and progress information.
 | Field | Type | Description |
 |-------|------|-------------|
 | `stage` | string | One of the stage values above |
-| `progress` | integer | 0–100; meaningful during `uploading` (bytes received %) |
+| `progress_pct` | integer | 0–100; meaningful during `uploading` |
 | `message` | string | Human-readable status detail |
+| `version_info` | object\|null | Parsed version.json when bundle is ready to apply |
 | `error` | string\|null | Error message if stage is `error`; null otherwise |
-| `version` | object\|null | Parsed version.json content when stage is `staged` or later |
+| `started_at` | string | ISO 8601 UTC timestamp when the sidecar process started |
+| `last_update_at` | string | ISO 8601 UTC timestamp of the last state change |
 
 ---
 
 ## GET /history
 
-Returns the full update history log.
+Returns the update history log (newest last).
 
 **Response: 200 OK**
 
 ```json
 [
   {
-    "version":    "v8",
-    "description": "Previous release",
-    "applied_at": "2025-04-01T10:00:00Z",
-    "status":     "applied",
-    "sha256":     "abc123..."
+    "version":              "v13",
+    "description":          "Inferno AoIP v13",
+    "oci_image":            "localhost/inferno-appliance:v13",
+    "sha256":               "abc123...",
+    "applied_at":           "2026-04-06T19:00:00Z",
+    "applied_at_complete":  "2026-04-06T19:05:33Z",
+    "status":               "applied",
+    "log_snippet":          null
   }
 ]
 ```
 
 History is persisted at `/var/lib/iot-updater/history.json`.
-Entries are appended on each successful apply. Never auto-pruned.
+Capped at **100 entries**; older entries are archived to `history-archive.json`.
+
+On failures, `log_snippet` contains the last 30 lines of `update.log` at the time of failure.
+
+### status values
+
+| Value | Meaning |
+|-------|---------|
+| `applying` | In progress (transient) |
+| `applied` | Successfully applied and rebooted |
+| `dry_run` | Dry run completed (no reboot) |
+| `error` | Apply failed (see `error` field) |
 
 ---
 
 ## GET /bootc-status
 
 Returns the current `bootc status` output parsed into booted/staged/rollback deployments.
-Result is cached for 5 seconds.
+Result is cached for up to 10 seconds.
 
 **Response: 200 OK**
 
 ```json
 {
   "booted": {
-    "image":     "localhost/inferno-appliance:v8",
+    "image":     "localhost/inferno-appliance:v13",
     "digest":    "sha256:abcdef...",
-    "version":   "v8",
-    "timestamp": "2025-04-01T10:00:00Z"
+    "version":   "43.20260405.0",
+    "timestamp": "2026-04-06T17:19:11Z"
   },
-  "staged":   null,
+  "staged":            null,
   "rollback": {
-    "image":     "localhost/inferno-appliance:v7",
+    "image":     "inferno-appliance:unknown",
     "digest":    "sha256:123456...",
-    "version":   "v7",
-    "timestamp": "2025-03-01T10:00:00Z"
-  }
+    "version":   "43.20260404.0",
+    "timestamp": "2026-04-05T10:37:47Z"
+  },
+  "cache_age_seconds": 0.3
 }
 ```
 
-Each of `booted`, `staged`, `rollback` is either an object (when a deployment exists in that slot)
-or `null`. The UI hides the rollback button when `rollback` is null.
-
-**Error Response: 500**
-
-```json
-{ "error": "bootc status failed: <stderr>" }
-```
+`cache_age_seconds` indicates how old the cached data is. The cache is refreshed automatically
+on apply/rollback transitions.
 
 ---
 
-## GET /version-preview?file=<path>
+## GET /version-preview
 
-Reads and returns `version.json` from the specified bundle path (must be on the device filesystem).
-Used internally by the sidecar after upload completes — not typically called by the UI directly.
+Returns the parsed `version.json` of the currently uploaded (but not yet applied) bundle.
 
-**Response: 200 OK** — contents of version.json as JSON object.
+**Response: 200 OK** — contents of version.json.
 
-**Error Response: 400/500** if file not found or JSON invalid.
+**Error: 404** if no bundle has been uploaded yet.
 
 ---
 
