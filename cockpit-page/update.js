@@ -383,8 +383,25 @@ function uploadAndPreview(file) {
                 return;
             }
             if (s.version_info) {
-                state.versionPreview = s.version_info;
-                showVersionPreview(state.versionPreview);
+                return api.get("/version-preview")
+                    .then(function(pvText) {
+                        var info = JSON.parse(pvText);
+                        state.versionPreview = info;
+                        showVersionPreview(info);
+                    })
+                    .catch(function(err) {
+                        var errData = {};
+                        try { errData = JSON.parse(err.message || "{}"); } catch(e) {}
+                        if (errData.expired) {
+                            showToast("error", "Bundle expired — cannot apply", false);
+                            document.getElementById("dz-sub").textContent =
+                                "Bundle expired on " + errData.valid_until + " — upload a new bundle";
+                        } else {
+                            // Fall back to status version_info if version-preview fails
+                            state.versionPreview = s.version_info;
+                            showVersionPreview(state.versionPreview);
+                        }
+                    });
             } else {
                 showError("Upload complete but version info missing from bundle.");
             }
@@ -481,6 +498,23 @@ function showVersionPreview(info) {
         clRow.style.display = "";
     } else if (clRow) {
         clRow.style.display = "none";
+    }
+
+    // Bundle expiry display
+    var expiryRow = document.getElementById("pv-expiry-row");
+    var expiryEl  = document.getElementById("bundle-expiry");
+    if (info.valid_until && expiryRow && expiryEl) {
+        var daysLeft = typeof info.days_remaining === "number" ? info.days_remaining : null;
+        var expiryText = info.valid_until;
+        if (daysLeft !== null) {
+            expiryText += daysLeft === 0 ? " (expires today)" :
+                          daysLeft === 1 ? " (1 day remaining)" :
+                          " (" + daysLeft + " days remaining)";
+        }
+        expiryEl.textContent  = expiryText;
+        expiryRow.style.display = "";
+    } else if (expiryRow) {
+        expiryRow.style.display = "none";
     }
 
     document.getElementById("version-preview").style.display = "block";
