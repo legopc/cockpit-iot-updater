@@ -4,6 +4,7 @@
     "cockpit": "233"
   },
   "content-security-policy": "default-src 'self'; connect-src 'self' http://127.0.0.1:8088; img-src 'self'; style-src 'self' 'unsafe-inline'",
+  "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDA2NmNjIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEyIDIyczgtNCA4LTEwVjVsLTgtMy04IDN2N2MwIDYgOCAxMCA4IDEweiIvPjxwb2x5bGluZSBwb2ludHM9IjggMTIgMTEgMTUgMTYgMTAiLz48L3N2Zz4=",
   "menu": {
     "index": {
       "label": "IoT Updater",

@@ -199,6 +199,51 @@ button.btn { min-height: 44px; }
 /* ── Rollback section ────────────────────────────────────────────────────────── */
 .rollback-info { margin-bottom: 10px; }
 
+/* ── Confirm modal (H-C) ─────────────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    z-index: 10000; display: flex; align-items: center; justify-content: center;
+    animation: fadeInOverlay .15s ease;
+}
+@keyframes fadeInOverlay { from { opacity: 0; } to { opacity: 1; } }
+.modal-box {
+    background: #fff; border-radius: 8px; padding: 24px 28px;
+    max-width: 440px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,.22);
+    animation: slideInModal .15s ease;
+}
+@keyframes slideInModal { from { transform: translateY(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
+.modal-title { font-size: 1rem; font-weight: 700; margin-bottom: 10px; }
+.modal-body { font-size: 0.88rem; color: #444; line-height: 1.5; margin-bottom: 20px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+@media (prefers-color-scheme: dark) {
+    .modal-box { background: #1e1e2e; }
+    .modal-body { color: #a6adc8; }
+}
+
+/* ── Disk space widget (H-E) ─────────────────────────────────────────────────── */
+.disk-bar-wrap { height: 6px; background: #e8e8e8; border-radius: 3px; overflow: hidden; margin: 6px 0 2px; }
+.disk-bar-fill { height: 100%; border-radius: 3px; transition: width .3s, background .3s; }
+.disk-bar-fill.ok      { background: #3e8635; }
+.disk-bar-fill.warn    { background: #f0ab00; }
+.disk-bar-fill.danger  { background: #c9190b; }
+.disk-info { font-size: 0.78rem; color: #6a6e73; display: flex; justify-content: space-between; }
+.disk-info.danger { color: #c9190b; font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+    .disk-bar-wrap { background: #45475a; }
+    .disk-info { color: #a6adc8; }
+}
+
+/* ── Upload speed + ETA label (K-E) ──────────────────────────────────────────── */
+.speed-label {
+    font-family: 'RedHatMono', 'Cascadia Code', 'Fira Mono', monospace;
+    font-size: 0.76rem; color: #0066cc; margin-top: 4px;
+    display: none;
+}
+.speed-label.visible { display: block; }
+@media (prefers-color-scheme: dark) {
+    .speed-label { color: #89b4fa; }
+}
+
 /* ── Dark mode ───────────────────────────────────────────────────────────────── */
 @media (prefers-color-scheme: dark) {
     body { background: #181825; color: #cdd6f4; }
@@ -229,3 +274,10 @@ button.btn { min-height: 44px; }
     .info-table code { background: #313244; }
     .hash-display { color: #cdd6f4; }
 }
+
+/* ── Animated status dot (K-C) ───────────────────────────────────────────────── */
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(0.7); }
+}
+.pill-dot.animating { animation: pulse-dot 1s ease-in-out infinite; }
