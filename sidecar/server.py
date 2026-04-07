@@ -322,6 +322,7 @@ def trigger_apply(version_info: dict):
         "description": version_info.get("description", ""),
         "oci_image":   version_info.get("oci_image_name", ""),
         "sha256":      version_info.get("image_sha256", ""),
+        "bundle_type": version_info.get("bundle_type", "full"),
         "applied_at":  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status":      "applying",
     }

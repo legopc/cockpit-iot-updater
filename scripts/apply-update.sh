@@ -130,17 +130,24 @@ try:
     print("VERSION=" + q(d.get('version', 'unknown')))
     print("DRY_RUN=" + q('yes' if d.get('dry_run') else 'no'))
     print("OCI_IMAGE_FILE=" + q(d.get('oci_image_file', '')))
-    print("IMAGE_NAME=" + q(d.get('oci_image_name', 'localhost/inferno-appliance:latest')))
+    print("BUNDLE_TYPE=" + q(d.get('bundle_type', 'full')))
+    raw_name = d.get('oci_image_name', '')
+    ver = d.get('version', 'unknown')
+    # Fall back to a sensible name if oci_image_name is absent or ends with :unknown
+    if not raw_name or raw_name.endswith(':unknown'):
+        raw_name = 'localhost/inferno-appliance:' + ver
+    print("IMAGE_NAME=" + q(raw_name))
     print("EXPECTED_SHA256=" + q(d.get('image_sha256', '')))
 except Exception as e:
     print("VERSION='unknown'")
     print("DRY_RUN='no'")
     print("OCI_IMAGE_FILE=''")
+    print("BUNDLE_TYPE='full'")
     print("IMAGE_NAME='localhost/inferno-appliance:latest'")
     print("EXPECTED_SHA256=''")
 PYEOF
 )"
-log "INFO" "Bundle metadata: version=${VERSION} dry_run=${DRY_RUN} oci=${OCI_IMAGE_FILE:-none}"
+log "INFO" "Bundle metadata: version=${VERSION} dry_run=${DRY_RUN} type=${BUNDLE_TYPE} oci=${OCI_IMAGE_FILE:-none}"
 
 # ── Ed25519 signature verification ───────────────────────────────────────────
 PUBLIC_KEY_PATH="/etc/iot-updater/signing.pub"
