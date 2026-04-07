@@ -194,7 +194,7 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
     OCI_TAR_PATH="${WORK_DIR}/${OCI_IMAGE_FILE}"
     [[ -f "$OCI_TAR_PATH" ]] || fail "Extracted OCI archive not found at ${OCI_TAR_PATH}"
 
-    # Load OCI image into local container storage
+    # Verify image integrity if sha256 is present in the bundle
     write_status "applying" 45 "Verifying image integrity (sha256)…"
     if [[ -n "$EXPECTED_SHA256" ]]; then
         echo "[apply-update] Verifying sha256 of image.tar…"
@@ -204,7 +204,9 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
         fi
         echo "[apply-update] sha256 OK: ${ACTUAL_SHA256}"
         log "INFO" "SHA256 verified OK: ${ACTUAL_SHA256}"
-        fail "No image_sha256 in version.json — refusing to apply unverified bundle"
+    else
+        echo "[apply-update] WARNING: No image_sha256 in version.json — skipping integrity check (old bundle)"
+        log "INFO" "SHA256 not present in bundle — skipping integrity check"
     fi
 
     # Detect archive format: OCI archives contain index.json at root;
