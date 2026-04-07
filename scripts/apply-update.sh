@@ -18,6 +18,10 @@
 
 set -euo pipefail
 
+# Include /var/lib/iot-updater in PATH so bundled tools (e.g. bspatch) are found
+# even on read-only rootfs appliances that lack bsdiff in the base image.
+export PATH="/var/lib/iot-updater:$PATH"
+
 BUNDLE_PATH="/var/tmp/iot43-update.iotupdate"
 BUNDLE_READY_PATH="/var/lib/iot-updater/bundle-ready"
 WORK_DIR="/var/tmp/iot-update-work"
@@ -187,6 +191,7 @@ if [ "$BUNDLE_TYPE" = "delta" ]; then
   BASE_VERSION=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('base_version','unknown'))" 2>/dev/null || echo "unknown")
   BASE_SHA256=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('base_sha256',''))" 2>/dev/null || echo "")
   TARGET_SHA256=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('target_sha256',''))" 2>/dev/null || echo "")
+  ARCHIVE_FORMAT=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('archive_format','oci'))" 2>/dev/null || echo "oci")
 
   [ -n "$BASE_SHA256" ] || fail "Delta bundle missing base_sha256 in version.json"
   [ -n "$TARGET_SHA256" ] || fail "Delta bundle missing target_sha256 in version.json"
@@ -229,13 +234,14 @@ except: print('')
   [ -n "$BOOTED_IMAGE" ] || fail "Cannot determine booted image name from bootc status"
   log "INFO" "Booted image: $BOOTED_IMAGE (expected base: $BASE_VERSION)"
 
-  # Export booted image from containers-storage to a tar
+  # Export booted image from containers-storage to a tar in the format the delta was built with
   write_status "applying" 25 "Exporting base image from container storage (this takes a few minutes)…"
-  echo "[apply-update] Exporting $BOOTED_IMAGE to base.tar via skopeo…"
-  SKOPEO_ERR=$(mktemp)
-  skopeo copy "containers-storage:${BOOTED_IMAGE}" "oci-archive:${BASE_EXPORT}" \
-    2>"$SKOPEO_ERR" || { log "ERROR" "skopeo export stderr: $(cat "$SKOPEO_ERR")"; rm -f "$SKOPEO_ERR"; fail "Failed to export base image from container storage. If storage was pruned, apply a full bundle instead."; }
-  rm -f "$SKOPEO_ERR"
+  echo "[apply-update] Exporting $BOOTED_IMAGE to base.tar via podman save (format: docker-archive)…"
+  PODMAN_ERR=$(mktemp)
+  # Use podman save --format docker-archive which produces the same bytes as the build-time export
+  podman save --format docker-archive "$BOOTED_IMAGE" -o "$BASE_EXPORT" \
+    2>"$PODMAN_ERR" || { log "ERROR" "podman save stderr: $(cat "$PODMAN_ERR")"; rm -f "$PODMAN_ERR"; fail "Failed to export base image from container storage. If storage was pruned, apply a full bundle instead."; }
+  rm -f "$PODMAN_ERR"
   log "INFO" "Base image exported: $(stat -c%s "$BASE_EXPORT" 2>/dev/null || echo '?') bytes"
 
   # Verify base image sha256 matches what the delta expects
