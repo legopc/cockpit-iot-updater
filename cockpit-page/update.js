@@ -366,6 +366,7 @@ function uploadAndPreview(file) {
         .then(function(text) {
             var s = JSON.parse(text);
             document.getElementById("progress-area").style.display = "none";
+            clearProgress();
             if (s.stage === "error") {
                 showError(s.error || s.message || "Bundle verification failed.");
                 return;
@@ -379,6 +380,7 @@ function uploadAndPreview(file) {
         })
         .catch(function(err) {
             document.getElementById("progress-area").style.display = "none";
+            clearProgress();
             showError("Upload failed: " + (err.message || err.problem || String(err)));
         });
 }
@@ -614,8 +616,11 @@ function renderHistory(history) {
             snippetHtml = '<br><button class="snippet-toggle" onclick="toggleSnippet(\'' + snippetId + '\')">▶ Show log</button>' +
                           '<div class="log-snippet" id="' + snippetId + '">' + snippetLines + '</div>';
         }
+        var dotClass = "hist-dot hist-dot-" + (h.status || "default");
+        if (["applied","error","dry_run","applying"].indexOf(h.status) === -1) dotClass = "hist-dot hist-dot-default";
         rows.push(
             "<tr>" +
+            "<td style='padding:8px 8px 8px 16px;width:26px;vertical-align:top'><div class='" + dotClass + "'></div></td>" +
             "<td><strong>" + esc(h.version) + "</strong>" + (sha ? "<br><small>sha256: " + sha + "</small>" : "") + "</td>" +
             "<td>" + esc(h.applied_at_complete || h.applied_at || "—") + "</td>" +
             "<td>" + esc(h.description || "—") + snippetHtml + "</td>" +
@@ -672,9 +677,30 @@ function renderLog(lines) {
     out.scrollTop = out.scrollHeight;
 }
 
+var _progressTarget = 0;
+var _progressCurrent = 0;
+var _progressTimer = null;
+
 function updateProgress(pct, label) {
+    _progressTarget = pct;
     document.getElementById("progress-fill").style.width = pct + "%";
-    document.getElementById("progress-label").textContent = label;
+    if (label) document.getElementById("progress-label").textContent = label;
+    if (_progressTimer) return;
+    _progressTimer = setInterval(function() {
+        if (_progressCurrent < _progressTarget) {
+            _progressCurrent = Math.min(_progressCurrent + 1, _progressTarget);
+            // label is already set above — no need to update text here
+        } else {
+            clearInterval(_progressTimer);
+            _progressTimer = null;
+        }
+    }, 16);
+}
+
+function clearProgress() {
+    _progressTarget = 0;
+    _progressCurrent = 0;
+    if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
 }
 
 function showError(msg) {

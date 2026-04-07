@@ -69,6 +69,8 @@ echo "  → cockpit/index.html"
 install -m 644 "$REPO_ROOT/cockpit-page/index.html"    "$DEST/cockpit/index.html"
 echo "  → cockpit/update.js"
 install -m 644 "$REPO_ROOT/cockpit-page/update.js"     "$DEST/cockpit/update.js"
+echo "  → cockpit/updater.css"
+install -m 644 "$REPO_ROOT/cockpit-page/updater.css"   "$DEST/cockpit/updater.css"
 
 # Sidecar and apply script
 echo "  → server.py"
