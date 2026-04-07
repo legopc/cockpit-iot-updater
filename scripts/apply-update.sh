@@ -48,6 +48,8 @@ except Exception:
     pass
 PYEOF
     log "ERROR" "$msg"
+    # Emit structured journal entry so the error appears in journalctl -u iot-update
+    echo "[iot-updater] APPLY FAILED: $msg" | systemd-cat -t iot-updater -p err 2>/dev/null || true
     echo "[apply-update] ERROR: $msg" >&2
     rm -rf "$WORK_DIR" || true
     rm -f "$BUNDLE_READY_PATH" || true
