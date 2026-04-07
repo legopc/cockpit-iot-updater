@@ -60,7 +60,7 @@
 |----|-------|--------|
 | C-1 | A | ✅ Done |
 | C-2 | A | ✅ Done |
-| C-3 | F | ⏳ Deferred — requires auth design sprint |
+| C-3 | F | ⏳ Deferred — practical risk mitigated by L-B (session token); full auth sprint lower priority |
 | C-4 | — | 🚫 Won't fix — intentional generic placeholder per user |
 | H-1 | A | ✅ Done |
 | H-2 | A | ✅ Done |
@@ -103,7 +103,7 @@
 | L-16 | A | ✅ Done |
 | L-17 | A | ✅ Done |
 
-**45 of 46 original items done** (M-15 resolved by HF-3). C-3 deferred to Sprint 4. C-4 won't fix.
+**45 of 46 original items done** (M-15 resolved by HF-3). C-3 deferred — practical risk mitigated by L-B (X-Session-Token on all mutating endpoints); a full auth design sprint remains optional. C-4 won't fix.
 
 ### Phase G — UI Redesign (completed)
 
@@ -149,7 +149,14 @@ Any local process can upload bundles, trigger updates, and initiate rollbacks. C
 requests but there is no session token or Unix peer-UID check.  
 **Fix:** Generate a random token on startup; require it as an `X-Updater-Token` header. The
 Cockpit page fetches the token once on load from a new `GET /token` endpoint (auth by Cockpit
-session itself).
+session itself).  
+**Update (L-B):** A per-startup `SESSION_TOKEN` is now generated and required as `X-Session-Token`
+on all mutating endpoints (`/upload`, `/apply`, `/rollback`, `/fetch-url`, `/manifest-config`).
+The Cockpit page calls `GET /session-token` on init and attaches the token to every request. CORS
+headers are tightened and `Origin` is validated. This mitigates the practical risk of C-3 — the
+remaining gap is that the token is fetched over the Cockpit-proxied channel (no Unix peer-UID
+check), which is acceptable for a local-network, lab-grade appliance. A full auth design sprint
+remains optional.
 
 ### C-4 · Credentials / personal paths in documentation
 **File:** `DEPLOYMENT-V9.md` line 12  
