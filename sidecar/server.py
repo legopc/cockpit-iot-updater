@@ -11,6 +11,7 @@ import hashlib
 import http.server
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 import threading
@@ -25,6 +26,7 @@ LOG_PATH     = Path("/var/lib/iot-updater/update.log")
 STATUS_PATH  = Path("/run/iot-update-status.json")
 HISTORY_ARCHIVE_PATH = Path("/var/lib/iot-updater/history-archive.json")
 HISTORY_MAX_ENTRIES  = 100
+REQUIRED_DISK_BYTES  = 6 * 1024 ** 3  # 6 GB: bundle + extraction headroom
 
 # Global state — only one concurrent update at a time
 _state = {
@@ -374,6 +376,16 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/health":
             self.send_json(200, {"ok": True, "service": "iot-updater", "stage": get_state()["stage"]})
 
+        elif self.path == "/disk-space":
+            usage = shutil.disk_usage("/var/tmp")
+            self.send_json(200, {
+                "available_bytes": usage.free,
+                "available_gb": round(usage.free / 1024 ** 3, 1),
+                "required_bytes": REQUIRED_DISK_BYTES,
+                "required_gb": round(REQUIRED_DISK_BYTES / 1024 ** 3, 1),
+                "ok": usage.free >= REQUIRED_DISK_BYTES
+            })
+
         else:
             self.send_json(404, {"error": "Not found."})
 
@@ -398,6 +410,13 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         state = get_state()
         if state["stage"] not in ("idle", "error"):
             self.send_json(409, {"error": f"Cannot start upload in state: {state['stage']}"})
+            return
+        # Pre-flight disk space check
+        free = shutil.disk_usage("/var/tmp").free
+        if free < REQUIRED_DISK_BYTES:
+            free_gb = round(free / 1024 ** 3, 1)
+            req_gb = round(REQUIRED_DISK_BYTES / 1024 ** 3, 1)
+            self.send_json(507, {"error": f"Insufficient disk space in /var/tmp: {free_gb} GB free, {req_gb} GB required"})
             return
         BUNDLE_PATH.unlink(missing_ok=True)
         # Clear stale status file from previous run so it cannot bleed into this session
