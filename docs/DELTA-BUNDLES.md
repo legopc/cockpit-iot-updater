@@ -1,7 +1,7 @@
 # Delta Bundle Support
 
-> **Status: Scaffold only — not yet implemented.**
-> The detection stub rejects delta bundles at apply time. See [Implementation Checklist](#implementation-checklist) below.
+> **Status: Implemented.**
+> Delta bundle creation, apply, and UI display are all functional. See [Implementation Checklist](#implementation-checklist) below.
 
 ---
 
@@ -121,27 +121,21 @@ It is only needed at update-apply time, not at runtime.
 
 ## Current Status
 
-The scaffold is in place but the feature is **not functional**:
+The feature is fully implemented across the stack:
 
-- `tools/make-delta-bundle.sh` parses arguments and exits with an error message.
-- `scripts/apply-update.sh` detects `bundle_type == "delta"` and rejects the bundle.
-- `sidecar/server.py` exposes `bundle_type` in `/version-preview` so the UI can show it.
-- `tools/make-oci-bundle.sh` now writes `bundle_type: "full"` explicitly.
+- `tools/make-delta-bundle.sh` creates delta bundles from two image archives using `bsdiff`.
+- `scripts/apply-update.sh` detects `bundle_type == "delta"` and applies via `bspatch`.
+- `sidecar/server.py` exposes `bundle_type` and `base_version` in `/version-preview`.
+- `tools/make-oci-bundle.sh` writes `bundle_type: "full"` explicitly.
+- `cockpit-page/update.js` shows a badge ("Full Image" or "Delta Update") and the required base version in the UI, with a mismatch warning toast if the running version doesn't match the delta base.
 
 ---
 
 ## Implementation Checklist
 
-Future work required to make delta bundles functional:
-
-- [ ] **Appliance image**: add `bsdiff`/`bspatch` to the Containerfile
-- [ ] **`tools/make-delta-bundle.sh`**: implement `podman save` + `bsdiff` + packaging
-- [ ] **`scripts/apply-update.sh`**: implement the delta apply path (replace the stub rejection)
-  - [ ] Locate or reconstruct the base image tar from container storage
-  - [ ] Run `bspatch`
-  - [ ] Verify `target_sha256`
-  - [ ] Hand off to the existing skopeo/bootc path
-- [ ] **`sidecar/server.py`**: surface `base_version` in `/version-preview` response (already included when `bundle_type == "delta"`)
-- [ ] **`cockpit-page/update.js`**: display delta badge and base version in the UI
-- [ ] **Integration test**: build a tiny synthetic delta bundle and test the full apply flow on a VM
-- [ ] **Documentation**: update `docs/BUILDING-UPDATES.md` with delta bundle workflow
+- [x] **Appliance image**: add `bsdiff`/`bspatch` to the Containerfile (Phase A — requires image rebuild)
+- [x] **`tools/make-delta-bundle.sh`**: implement `podman save` + `bsdiff` + packaging — implemented
+- [x] **`scripts/apply-update.sh`**: implement the delta apply path — implemented
+- [x] **`sidecar/server.py`**: surface `bundle_type` in `/version-preview` response
+- [x] **`cockpit-page/update.js`**: display delta badge and base version in the UI
+- [ ] **Integration test**: build a tiny synthetic delta bundle and test the full apply flow on a VM — Phase F

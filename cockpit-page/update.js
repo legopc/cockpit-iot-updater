@@ -498,6 +498,40 @@ function showVersionPreview(info) {
     document.getElementById("pv-type").textContent    = info.dry_run
         ? "🧪 Dry run (no actual update)" : "Production";
 
+    // Bundle type badge (delta vs full)
+    var typeBadge = document.getElementById("bundle-type-badge");
+    if (typeBadge) {
+        if (info.bundle_type === "delta") {
+            typeBadge.textContent = "Delta Update";
+            typeBadge.className   = "badge-delta";
+        } else {
+            typeBadge.textContent = "Full Image";
+            typeBadge.className   = "badge-full";
+        }
+    }
+
+    // Base version row (delta bundles only)
+    var baseRow = document.getElementById("pv-base-version-row");
+    var baseEl  = document.getElementById("pv-base-version");
+    if (info.bundle_type === "delta" && baseRow && baseEl) {
+        baseEl.textContent      = info.base_version || "unknown";
+        baseRow.style.display   = "";
+        // Warn if booted version doesn't match required base
+        api.get("/bootc-status")
+            .then(function(text) {
+                var bs = JSON.parse(text);
+                var bootedVersion = (bs.booted || {}).version || null;
+                if (info.base_version && bootedVersion && bootedVersion !== info.base_version) {
+                    showToast("warning", "Base version mismatch: this delta requires base " +
+                        info.base_version + " but currently running " + bootedVersion +
+                        ". Apply a full bundle first.");
+                }
+            })
+            .catch(function() { /* best-effort */ });
+    } else if (baseRow) {
+        baseRow.style.display = "none";
+    }
+
     // Signed/unsigned badge
     var signedBadge = document.getElementById("bundle-signed-badge");
     if (signedBadge) {

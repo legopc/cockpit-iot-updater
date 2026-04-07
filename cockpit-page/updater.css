@@ -311,3 +311,23 @@ button.btn { min-height: 44px; }
     50%       { opacity: 0.4; transform: scale(0.7); }
 }
 .pill-dot.animating { animation: pulse-dot 1s ease-in-out infinite; }
+
+/* ── Bundle type badges (Phase D) ────────────────────────────────────────────── */
+.badge-full {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--pf-v5-global--palette--blue-100, #bee1f4);
+  color: var(--pf-v5-global--palette--blue-700, #004368);
+}
+.badge-delta {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--pf-v5-global--palette--purple-100, #e7d7f7);
+  color: var(--pf-v5-global--palette--purple-700, #3d0099);
+}
