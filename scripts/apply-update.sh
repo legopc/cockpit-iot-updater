@@ -6,11 +6,15 @@
 #   version.json    — bundle metadata (always present)
 #   image.tar       — OCI image export (for OCI/bootc updates)
 #   update.delta    — OSTree static delta (for OSTree updates, legacy)
+#   delta.patch     — bsdiff binary patch (for delta bundles)
 #
 # version.json fields:
 #   "dry_run": true           → simulation only, no changes
 #   "oci_image_file": "..."   → OCI image update (uses bootc switch)
 #   "to_commit": "..."        → OSTree static delta update (legacy)
+#   "bundle_type": "delta"    → delta bundle (bsdiff patch, requires bspatch on appliance)
+#   "base_sha256": "..."      → sha256 of booted image tar (verified before patching)
+#   "target_sha256": "..."    → sha256 of patched result (verified after patching)
 
 set -euo pipefail
 
@@ -174,10 +178,124 @@ else
   log "INFO" "No public key at $PUBLIC_KEY_PATH — skipping signature verification"
 fi
 
-# ── Delta bundle detection (not yet supported) ────────────────────────────────
+# ── Delta bundle detection ────────────────────────────────────────────────────
 BUNDLE_TYPE=$(python3 -c "import json,sys; d=json.load(open('$WORK_DIR/version.json')); print(d.get('bundle_type','full'))" 2>/dev/null || echo "full")
 if [ "$BUNDLE_TYPE" = "delta" ]; then
-  fail "Delta bundles are not yet supported. Use a full bundle."
+  log "INFO" "Delta bundle detected — starting delta apply path"
+
+  # Read delta-specific fields from version.json
+  BASE_VERSION=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('base_version','unknown'))" 2>/dev/null || echo "unknown")
+  BASE_SHA256=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('base_sha256',''))" 2>/dev/null || echo "")
+  TARGET_SHA256=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('target_sha256',''))" 2>/dev/null || echo "")
+
+  [ -n "$BASE_SHA256" ] || fail "Delta bundle missing base_sha256 in version.json"
+  [ -n "$TARGET_SHA256" ] || fail "Delta bundle missing target_sha256 in version.json"
+  [ -n "$OCI_IMAGE_FILE" ] && fail "Delta bundle must not have oci_image_file — malformed bundle"
+
+  # Verify bspatch is available
+  command -v bspatch >/dev/null 2>&1 || fail "bspatch not found — delta bundles require the bsdiff package on the appliance"
+
+  # Check disk space: need ~6 GB for base.tar + new-image.tar + delta.patch
+  AVAIL_KB_DELTA=$(df -k /var/tmp --output=avail | tail -1)
+  [ "$AVAIL_KB_DELTA" -ge 6291456 ] || fail "Insufficient space for delta apply: need 6 GB, have $((AVAIL_KB_DELTA / 1024)) MB in /var/tmp"
+
+  write_status "applying" 15 "Extracting delta patch from bundle…"
+  DELTA_PATCH="${WORK_DIR}/delta.patch"
+  BASE_EXPORT="${WORK_DIR}/base-export.tar"
+  NEW_IMAGE="${WORK_DIR}/new-image.tar"
+
+  tar -xf "$BUNDLE_PATH" -C "$WORK_DIR" delta.patch 2>/dev/null \
+    || fail "Failed to extract delta.patch from bundle"
+  [ -f "$DELTA_PATCH" ] || fail "delta.patch not found after extraction"
+  log "INFO" "delta.patch extracted: $(stat -c%s "$DELTA_PATCH" 2>/dev/null || echo '?') bytes"
+
+  # Get currently booted image name from bootc
+  write_status "applying" 20 "Identifying booted image for delta base…"
+  BOOTED_IMAGE=$(bootc status --format json 2>/dev/null | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    # Try different JSON structures bootc versions use
+    b=d.get('status',{}).get('booted',{})
+    img=b.get('image',{})
+    # New format
+    transport=img.get('image',{}).get('transport','')
+    name=img.get('image',{}).get('image','')
+    if name: print(name); sys.exit(0)
+    # Old format
+    print(b.get('image',''))
+except: print('')
+" 2>/dev/null)
+  [ -n "$BOOTED_IMAGE" ] || fail "Cannot determine booted image name from bootc status"
+  log "INFO" "Booted image: $BOOTED_IMAGE (expected base: $BASE_VERSION)"
+
+  # Export booted image from containers-storage to a tar
+  write_status "applying" 25 "Exporting base image from container storage (this takes a few minutes)…"
+  echo "[apply-update] Exporting $BOOTED_IMAGE to base.tar via skopeo…"
+  SKOPEO_ERR=$(mktemp)
+  skopeo copy "containers-storage:${BOOTED_IMAGE}" "oci-archive:${BASE_EXPORT}" \
+    2>"$SKOPEO_ERR" || { log "ERROR" "skopeo export stderr: $(cat "$SKOPEO_ERR")"; rm -f "$SKOPEO_ERR"; fail "Failed to export base image from container storage. If storage was pruned, apply a full bundle instead."; }
+  rm -f "$SKOPEO_ERR"
+  log "INFO" "Base image exported: $(stat -c%s "$BASE_EXPORT" 2>/dev/null || echo '?') bytes"
+
+  # Verify base image sha256 matches what the delta expects
+  write_status "applying" 40 "Verifying base image integrity…"
+  ACTUAL_BASE_SHA256=$(sha256sum "$BASE_EXPORT" | awk '{print $1}')
+  if [ "$ACTUAL_BASE_SHA256" != "$BASE_SHA256" ]; then
+    rm -f "$BASE_EXPORT" "$DELTA_PATCH"
+    fail "Running image sha256 does not match delta bundle base. You may have upgraded since this delta was built. Apply a full bundle instead."
+  fi
+  log "INFO" "Base sha256 verified: $ACTUAL_BASE_SHA256"
+
+  # Apply bsdiff patch
+  write_status "applying" 50 "Applying delta patch (this takes several minutes)…"
+  echo "[apply-update] Running bspatch…"
+  BSPATCH_ERR=$(mktemp)
+  bspatch "$BASE_EXPORT" "$NEW_IMAGE" "$DELTA_PATCH" \
+    2>"$BSPATCH_ERR" || { log "ERROR" "bspatch stderr: $(cat "$BSPATCH_ERR")"; rm -f "$BSPATCH_ERR" "$BASE_EXPORT" "$DELTA_PATCH"; fail "bspatch failed — delta patch may be corrupt"; }
+  rm -f "$BSPATCH_ERR" "$BASE_EXPORT" "$DELTA_PATCH"
+  log "INFO" "bspatch complete: new-image.tar is $(stat -c%s "$NEW_IMAGE" 2>/dev/null || echo '?') bytes"
+
+  # Verify resulting image sha256
+  write_status "applying" 65 "Verifying patched image integrity…"
+  ACTUAL_TARGET_SHA256=$(sha256sum "$NEW_IMAGE" | awk '{print $1}')
+  if [ "$ACTUAL_TARGET_SHA256" != "$TARGET_SHA256" ]; then
+    rm -f "$NEW_IMAGE"
+    fail "Patched image sha256 mismatch — patch may be corrupt or truncated. Apply a full bundle."
+  fi
+  log "INFO" "Patched image sha256 verified: $ACTUAL_TARGET_SHA256"
+
+  # Load new image into container storage via skopeo
+  write_status "applying" 75 "Loading patched image into container storage…"
+  echo "[apply-update] Loading $IMAGE_NAME via skopeo…"
+  # Detect format of the reconstructed tar
+  if tar -tf "$NEW_IMAGE" index.json >/dev/null 2>&1; then
+    SKOPEO_SRC="oci-archive:${NEW_IMAGE}"
+  else
+    SKOPEO_SRC="docker-archive:${NEW_IMAGE}"
+  fi
+  SKOPEO_ERR=$(mktemp)
+  skopeo copy "$SKOPEO_SRC" "containers-storage:${IMAGE_NAME}" \
+    2>"$SKOPEO_ERR" || { log "ERROR" "skopeo stderr: $(cat "$SKOPEO_ERR")"; rm -f "$SKOPEO_ERR" "$NEW_IMAGE"; fail "skopeo copy of patched image failed"; }
+  rm -f "$SKOPEO_ERR" "$NEW_IMAGE"
+  log "INFO" "skopeo copy of delta image complete"
+
+  # Switch bootc
+  write_status "applying" 88 "Staging bootc update to ${IMAGE_NAME}…"
+  BOOTC_ERR=$(mktemp)
+  bootc switch --transport containers-storage "${IMAGE_NAME}" \
+    2>"$BOOTC_ERR" || { log "ERROR" "bootc stderr: $(cat "$BOOTC_ERR")"; rm -f "$BOOTC_ERR"; fail "bootc switch failed for delta image"; }
+  rm -f "$BOOTC_ERR"
+  log "INFO" "bootc switch complete — staged $IMAGE_NAME from delta"
+
+  mark_complete "applied"
+  rm -rf "$WORK_DIR" "$BUNDLE_PATH"
+  rm -f "$BUNDLE_READY_PATH"
+  write_status "rebooting" 100 "Delta update v${VERSION} staged. Rebooting in 5 seconds…"
+  echo "[apply-update] DELTA SUCCESS — rebooting to $IMAGE_NAME"
+  log "SUCCESS" "Delta update v${VERSION} applied (base: $BASE_VERSION) — rebooting"
+  systemctl reboot
+  exit 0
 fi
 
 # Security: ensure oci_image_file is a plain filename (no path traversal)
