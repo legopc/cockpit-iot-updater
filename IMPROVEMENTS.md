@@ -43,14 +43,14 @@
 
 | ID | Item | Status |
 |----|------|--------|
-| J-C | Delta bundle scaffold (`make-delta-bundle.sh` + design doc) | ⏳ Sprint 3 |
-| J-A | Bundle manifest URL + sidecar polling | ⏳ Sprint 3 |
-| J-B | Auto-update check from manifest URL | ⏳ Sprint 3 |
-| J-E | Bundle replay protection (`valid_until`) | ⏳ Sprint 3 |
-| L-A | Sidecar rate limiting (429) | ⏳ Sprint 3 |
-| L-B | C-3 auth token (design + implementation) | ⏳ Sprint 4 |
-| L-D | CORS tightening | ⏳ Sprint 4 |
-| J-D | Ed25519 bundle signing | ⏳ Sprint 4 |
+| J-C | Delta bundle scaffold (`make-delta-bundle.sh` + design doc) | ✅ Done |
+| J-A | Bundle manifest URL + sidecar polling | ✅ Done |
+| J-B | Auto-update check from manifest URL | ✅ Done |
+| J-E | Bundle replay protection (`valid_until`) | ✅ Done |
+| L-A | Sidecar rate limiting (429) | ✅ Done |
+| L-B | Session auth token (X-Session-Token) | ✅ Done |
+| L-D | CORS tightening | ✅ Done |
+| J-D | Ed25519 bundle signing scaffold | ✅ Done |
 
 ---
 
