@@ -3,7 +3,7 @@ Description=Cockpit IoT Updater — apply OSTree update and reboot
 Documentation=https://github.com/legopc/cockpit-iot-updater
 After=network.target systemd-tmpfiles-setup.service
 # Prevent accidental re-run
-ConditionPathExists=/var/tmp/iot43-update.iotupdate
+ConditionPathExists=/var/lib/iot-updater/bundle-ready
 
 [Service]
 Type=oneshot

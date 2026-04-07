@@ -20,7 +20,8 @@ from pathlib import Path
 
 LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 8088
-BUNDLE_PATH  = Path("/var/tmp/iot43-update.iotupdate")
+BUNDLE_PATH       = Path("/var/tmp/iot43-update.iotupdate")
+BUNDLE_READY_PATH = Path("/var/lib/iot-updater/bundle-ready")
 HISTORY_PATH = Path("/var/lib/iot-updater/history.json")
 LOG_PATH     = Path("/var/lib/iot-updater/update.log")
 STATUS_PATH  = Path("/run/iot-update-status.json")
@@ -398,6 +399,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             self._handle_apply()
         elif self.path == "/upload/cancel":
             BUNDLE_PATH.unlink(missing_ok=True)
+            BUNDLE_READY_PATH.unlink(missing_ok=True)
             set_state(stage="idle", progress_pct=0, message="Upload cancelled.",
                       version_info=None, error=None)
             self.send_json(200, {"ok": True})
@@ -419,6 +421,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(507, {"error": f"Insufficient disk space in /var/tmp: {free_gb} GB free, {req_gb} GB required"})
             return
         BUNDLE_PATH.unlink(missing_ok=True)
+        BUNDLE_READY_PATH.unlink(missing_ok=True)
         # Clear stale status file from previous run so it cannot bleed into this session
         STATUS_PATH.unlink(missing_ok=True)
         set_state(stage="uploading", progress_pct=0, message="Upload started.",
@@ -489,6 +492,12 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             else:
                 result = "(no hash in bundle)"
 
+            # Write persistent marker so iot-update.service survives a reboot
+            BUNDLE_READY_PATH.write_text(json.dumps({
+                "version": version_info.get("version", "unknown"),
+                "bundle_path": str(BUNDLE_PATH),
+                "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }))
             set_state(
                 stage="idle",
                 progress_pct=100,

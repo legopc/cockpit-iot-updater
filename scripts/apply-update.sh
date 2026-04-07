@@ -15,6 +15,7 @@
 set -euo pipefail
 
 BUNDLE_PATH="/var/tmp/iot43-update.iotupdate"
+BUNDLE_READY_PATH="/var/lib/iot-updater/bundle-ready"
 WORK_DIR="/var/tmp/iot-update-work"
 VERSION_JSON_PATH="${WORK_DIR}/version.json"
 STATUS_PATH="/run/iot-update-status.json"
@@ -49,6 +50,7 @@ PYEOF
     log "ERROR" "$msg"
     echo "[apply-update] ERROR: $msg" >&2
     rm -rf "$WORK_DIR" || true
+    rm -f "$BUNDLE_READY_PATH" || true
     exit 1
 }
 
@@ -172,6 +174,7 @@ if [[ "$DRY_RUN" == "yes" ]]; then
     mark_complete "dry_run"
     log "DRY_RUN" "Dry run complete for v${VERSION}"
     rm -rf "$WORK_DIR" "$BUNDLE_PATH"
+    rm -f "$BUNDLE_READY_PATH"
     write_status "idle" 0 "Dry run v${VERSION} applied (no actual changes made)."
     echo "[apply-update] DRY RUN complete for v${VERSION}"
     exit 0
@@ -238,6 +241,7 @@ if [[ -n "$OCI_IMAGE_FILE" ]]; then
 
     mark_complete "applied"
     rm -rf "$WORK_DIR" "$BUNDLE_PATH"
+    rm -f "$BUNDLE_READY_PATH"
 
     write_status "rebooting" 100 "Update v${VERSION} staged. Rebooting in 5 seconds…"
     echo "[apply-update] SUCCESS — rebooting to apply ${IMAGE_NAME}"
@@ -279,6 +283,7 @@ rm -f "$RPMOSTREE_ERR"
 
 mark_complete "applied"
 rm -rf "$WORK_DIR" "$BUNDLE_PATH"
+rm -f "$BUNDLE_READY_PATH"
 
 write_status "rebooting" 100 "Update applied (v${VERSION}). Rebooting in 5 seconds…"
 echo "[apply-update] SUCCESS — rebooting"
