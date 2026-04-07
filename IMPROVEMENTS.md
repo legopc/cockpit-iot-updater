@@ -5,6 +5,55 @@
 
 ---
 
+## Post-Session-Recovery Work (2026-04-07)
+
+### Hotfixes Applied
+
+| ID | Item | Commit | Status |
+|----|------|--------|--------|
+| HF-1 | Sidecar disk-space guard + `GET /disk-space` endpoint | `41adeee` | ✅ Done |
+| HF-2 | `NoNewPrivileges=true` in `iot-updater.service` (H-1 regression) | `a2c6153` | ✅ Done |
+| HF-3 | Persistent `bundle-ready` marker replaces volatile `/var/tmp` `ConditionPathExists` | `12afea0` | ✅ Done |
+
+### Sprint 1 — UX & Workflow (2026-04-07)
+
+| ID | Item | Status |
+|----|------|--------|
+| H-A | Upload speed meter + ETA below progress bar | ✅ Done |
+| H-B | `POST /fetch-url` — server-side bundle download from URL | ✅ Done |
+| H-C | Native confirm modal replaces `window.confirm()` | ✅ Done |
+| H-D | `--changelog` in `make-oci-bundle.sh`, displayed in version preview | ✅ Done |
+| H-E | Disk space widget in Apply Update card (calls `GET /disk-space`) | ✅ Done |
+| K-A | SVG shield-check icon replaces emoji in page header | ✅ Done |
+| K-B | Cockpit manifest icon (SVG base64 in `manifest.json`) | ✅ Done |
+| K-C | Animated pulse on status pill dot during active stages | ✅ Done |
+| K-E | Upload speed + ETA monospace label under progress bar | ✅ Done |
+
+### Sprint 2 — Operations & Polish (2026-04-07)
+
+| ID | Item | Status |
+|----|------|--------|
+| I-D | Structured audit log + `GET /audit` endpoint | ✅ Done |
+| I-E | `systemd-cat` journal marker on apply failure | ✅ Done |
+| K-D | History timeline dots (coloured status dots per row) | ✅ Done |
+| K-F | Smooth animated progress counter | ✅ Done |
+| K-I | `word-break: break-all` on hash display cells | ✅ Done |
+
+### Remaining / Deferred
+
+| ID | Item | Status |
+|----|------|--------|
+| J-C | Delta bundle scaffold (`make-delta-bundle.sh` + design doc) | ⏳ Sprint 3 |
+| J-A | Bundle manifest URL + sidecar polling | ⏳ Sprint 3 |
+| J-B | Auto-update check from manifest URL | ⏳ Sprint 3 |
+| J-E | Bundle replay protection (`valid_until`) | ⏳ Sprint 3 |
+| L-A | Sidecar rate limiting (429) | ⏳ Sprint 3 |
+| L-B | C-3 auth token (design + implementation) | ⏳ Sprint 4 |
+| L-D | CORS tightening | ⏳ Sprint 4 |
+| J-D | Ed25519 bundle signing | ⏳ Sprint 4 |
+
+---
+
 ## Implementation Status
 
 | ID | Phase | Status |
@@ -37,7 +86,7 @@
 | M-12 | C | ✅ Done |
 | M-13 | C | ✅ Done |
 | M-14 | D | ✅ Done |
-| M-15 | — | ⏳ Open — fragile ConditionPathExists |
+| M-15 | — | ✅ Done |
 | L-1 | C | ✅ Done |
 | L-2 | C | ✅ Done |
 | L-3 | C | ✅ Done (verified — format already correct) |
@@ -54,7 +103,7 @@
 | L-16 | A | ✅ Done |
 | L-17 | A | ✅ Done |
 
-**44 of 46 original items done** + Phase G UI redesign complete. Remaining from original backlog: C-3 (auth — Phase F deferred), C-4 (won't fix), M-15.
+**45 of 46 original items done** (M-15 resolved by HF-3). C-3 deferred to Sprint 4. C-4 won't fix.
 
 ### Phase G — UI Redesign (completed)
 
