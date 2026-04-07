@@ -16,6 +16,8 @@ import subprocess
 import tarfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 LISTEN_HOST = "127.0.0.1"
@@ -28,6 +30,7 @@ STATUS_PATH  = Path("/run/iot-update-status.json")
 HISTORY_ARCHIVE_PATH = Path("/var/lib/iot-updater/history-archive.json")
 HISTORY_MAX_ENTRIES  = 100
 REQUIRED_DISK_BYTES  = 6 * 1024 ** 3  # 6 GB: bundle + extraction headroom
+FETCH_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB streaming chunks
 
 # Global state — only one concurrent update at a time
 _state = {
@@ -405,6 +408,8 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True})
         elif self.path == "/rollback":
             self._handle_rollback()
+        elif self.path == "/fetch-url":
+            self._handle_fetch_url()
         else:
             self.send_json(404, {"error": "Not found."})
 
@@ -532,6 +537,113 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         rollback_image = bs["rollback"].get("image", "previous image")
         threading.Thread(target=do_rollback, daemon=True).start()
         self.send_json(200, {"ok": True, "rolling_back_to": rollback_image})
+
+    def _handle_fetch_url(self):
+        state = get_state()
+        if state["stage"] not in ("idle", "error"):
+            self.send_json(409, {"error": f"Cannot fetch URL in state: {state['stage']}"})
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self.send_json(400, {"error": "Empty request body."})
+            return
+        body = self.rfile.read(content_length)
+        try:
+            payload = json.loads(body)
+        except Exception:
+            self.send_json(400, {"error": "Invalid JSON body."})
+            return
+
+        url = payload.get("url", "").strip()
+        if not url:
+            self.send_json(400, {"error": "Missing 'url' field."})
+            return
+        if not (url.startswith("https://") or url.startswith("http://")):
+            self.send_json(400, {"error": "URL must start with http:// or https://"})
+            return
+        if not url.endswith(".iotupdate"):
+            self.send_json(400, {"error": "URL must point to a .iotupdate file."})
+            return
+
+        # Disk space pre-flight (same guard as upload)
+        free = shutil.disk_usage("/var/tmp").free
+        if free < REQUIRED_DISK_BYTES:
+            free_gb = round(free / 1024 ** 3, 1)
+            req_gb = round(REQUIRED_DISK_BYTES / 1024 ** 3, 1)
+            self.send_json(507, {"error": f"Insufficient disk space: {free_gb} GB free, {req_gb} GB required"})
+            return
+
+        BUNDLE_PATH.unlink(missing_ok=True)
+        BUNDLE_READY_PATH.unlink(missing_ok=True)
+        STATUS_PATH.unlink(missing_ok=True)
+        set_state(stage="uploading", progress_pct=0,
+                  message=f"Fetching bundle from URL…", version_info=None, error=None)
+
+        # Respond immediately — download happens in background thread
+        self.send_json(200, {"ok": True, "url": url})
+
+        threading.Thread(target=self._do_fetch_url, args=(url,), daemon=True).start()
+
+    def _do_fetch_url(self, url: str):
+        """Download bundle from URL in background, updating progress state."""
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "cockpit-iot-updater/1.0"})
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                total = int(resp.headers.get("Content-Length") or 0)
+                downloaded = 0
+                with open(BUNDLE_PATH, "wb") as f:
+                    os.chmod(BUNDLE_PATH, 0o600)
+                    while True:
+                        chunk = resp.read(FETCH_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            pct = min(int(downloaded / total * 95), 95)
+                            mb = downloaded / 1024 / 1024
+                            set_state(stage="uploading", progress_pct=pct,
+                                      message=f"Fetching… {mb:.1f} MB downloaded")
+        except urllib.error.URLError as e:
+            err = f"Fetch failed: {e.reason}"
+            BUNDLE_PATH.unlink(missing_ok=True)
+            set_state(stage="error", message=err, error=err)
+            return
+        except Exception as e:
+            err = f"Fetch error: {e}"
+            BUNDLE_PATH.unlink(missing_ok=True)
+            set_state(stage="error", message=err, error=err)
+            return
+
+        # Metadata extraction + verification (same as upload path)
+        set_state(stage="extracting", progress_pct=100, message="Reading bundle metadata…")
+        version_info = extract_version_from_bundle(BUNDLE_PATH)
+        if not version_info or "error" in version_info:
+            err = (version_info or {}).get("error", "version.json missing or invalid")
+            BUNDLE_PATH.unlink(missing_ok=True)
+            set_state(stage="error", message=f"Bundle error: {err}", error=err)
+            return
+
+        if version_info.get("image_sha256"):
+            set_state(stage="verifying", progress_pct=100,
+                      message="Verifying bundle integrity (sha256)…")
+            ok, result = verify_bundle_hash(BUNDLE_PATH, version_info)
+            if not ok:
+                BUNDLE_PATH.unlink(missing_ok=True)
+                set_state(stage="error", message=result, error=result)
+                return
+
+        BUNDLE_READY_PATH.write_text(json.dumps({
+            "version": version_info.get("version", "unknown"),
+            "bundle_path": str(BUNDLE_PATH),
+            "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }))
+        set_state(
+            stage="idle", progress_pct=100,
+            message=f"Bundle ready: v{version_info.get('version', '?')}. Review and confirm to apply.",
+            version_info=version_info, error=None,
+        )
 
 
 def main():
