@@ -10,7 +10,7 @@
 <div id="toast-area"></div>
 
 <!-- Update available banner -->
-<div id="update-available-banner" class="update-banner" style="display:none">
+<div id="update-available-banner" class="update-banner hidden-display">
   <span class="update-banner-icon">🔔</span>
   <span id="update-banner-msg">A new version is available.</span>
   <button id="update-banner-btn" class="pf-v5-c-button pf-m-primary pf-m-small">View</button>
@@ -59,13 +59,13 @@
         </div>
 
         <!-- Staged banner -->
-        <div id="staged-banner" style="display:none">
+        <div id="staged-banner" class="hidden-display">
           ⏳ <strong>Reboot pending</strong> — staged update waiting.
           Staged: <span id="staged-image">unknown</span>
         </div>
 
         <!-- Rollback -->
-        <div id="rollback-section" style="display:none">
+        <div id="rollback-section" class="hidden-display">
           <div class="section-sep">Available Rollback</div>
           <div class="rollback-info">
             <table class="info-table">
@@ -86,16 +86,16 @@
         <span id="status-badge" class="badge-idle">Idle</span>
       </div>
       <div class="card-body">
-        <div id="sidecar-warn" style="display:none">⚠ Cannot reach updater sidecar. Run: <code>sudo systemctl start iot-updater</code></div>
+        <div id="sidecar-warn" class="hidden-display">⚠ Cannot reach updater sidecar. Run: <code>sudo systemctl start iot-updater</code></div>
 
         <!-- Disk space indicator (H-E) -->
-        <div id="disk-space-widget" style="margin-bottom:10px;display:none">
-          <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <span style="font-size:0.78rem;font-weight:600;color:#6a6e73">Disk space</span>
-            <span id="disk-avail-label" class="disk-info" style="font-size:0.78rem"></span>
+        <div id="disk-space-widget" class="hidden-display-margin">
+          <div class="flex-space-between">
+            <span class="text-label-heavy">Disk space</span>
+            <span id="disk-avail-label" class="disk-info fs-xs"></span>
           </div>
-          <div class="disk-bar-wrap"><div class="disk-bar-fill ok" id="disk-bar-fill" style="width:0%"></div></div>
-          <div id="disk-warn-msg" style="font-size:0.76rem;color:#c9190b;display:none;margin-top:2px"></div>
+          <div class="disk-bar-wrap"><div class="disk-bar-fill ok" id="disk-bar-fill" class="width-fill"></div></div>
+          <div id="disk-warn-msg" class="text-error-xs"></div>
         </div>
 
         <div id="drop-zone">
@@ -110,71 +110,71 @@
         </div>
 
         <!-- URL fetch alternative (H-B) -->
-        <div id="url-fetch-section" style="margin-top:10px">
-          <div style="font-size:0.78rem;color:#6a6e73;margin-bottom:6px;font-weight:600">— or fetch from URL —</div>
-          <div style="display:flex;gap:8px;align-items:center">
+        <div id="url-fetch-section" class="mt-md">
+          <div class="text-label-xs">— or fetch from URL —</div>
+          <div class="flex-gap">
             <input type="url" id="fetch-url-input" placeholder="https://builds.example.com/v14.iotupdate"
-                   style="flex:1;padding:6px 10px;border:1px solid #d2d2d2;border-radius:4px;font-size:0.85rem;font-family:inherit">
-            <button class="btn btn-secondary btn-sm" id="btn-fetch-url" style="white-space:nowrap">⬇ Fetch</button>
+                   class="input-url">
+            <button class="btn btn-secondary btn-sm nowrap" id="btn-fetch-url">⬇ Fetch</button>
           </div>
-          <div id="fetch-url-error" style="font-size:0.78rem;color:#c9190b;margin-top:4px;display:none"></div>
+          <div id="fetch-url-error" class="text-error-xs"></div>
         </div>
 
         <!-- Manifest / Auto-update (J-A/J-B) -->
-        <div id="manifest-section" style="margin-top:14px">
-          <div style="font-size:0.78rem;color:#6a6e73;margin-bottom:6px;font-weight:600">— Manifest / Auto-update —</div>
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <div id="manifest-section" class="mt-lg">
+          <div class="text-label-xs">— Manifest / Auto-update —</div>
+          <div class="flex-gap-margin">
             <input type="url" id="manifest-url-input" placeholder="https://builds.example.com/latest.json"
-                   style="flex:1;padding:6px 10px;border:1px solid #d2d2d2;border-radius:4px;font-size:0.85rem;font-family:inherit">
-            <button class="btn btn-secondary btn-sm" id="btn-save-manifest" style="white-space:nowrap">💾 Save</button>
-            <button class="btn btn-secondary btn-sm" id="btn-check-update" style="white-space:nowrap">🔍 Check now</button>
+                   class="input-url">
+            <button class="btn btn-secondary btn-sm nowrap" id="btn-save-manifest">💾 Save</button>
+            <button class="btn btn-secondary btn-sm nowrap" id="btn-check-update">🔍 Check now</button>
           </div>
-          <div id="manifest-last-checked" style="font-size:0.76rem;color:#6a6e73"></div>
+          <div id="manifest-last-checked" class="text-muted-xs"></div>
         </div>
 
-        <div id="version-preview" style="display:none">
-          <table class="info-table" style="margin-top:4px">
-            <tr><td class="info-key">Version</td><td id="pv-version">—</td><td style="padding-left:8px"><span id="bundle-type-badge" class="badge-full">Full Image</span> <span id="bundle-signed-badge"></span></td></tr>
-            <tr id="pv-base-version-row" style="display:none">
+        <div id="version-preview" class="hidden-display">
+          <table class="info-table mt-xs">
+            <tr><td class="info-key">Version</td><td id="pv-version">—</td><td class="pl-md"><span id="bundle-type-badge" class="badge-full">Full Image</span> <span id="bundle-signed-badge"></span></td></tr>
+            <tr id="pv-base-version-row" class="hidden-display">
               <td class="info-key">Base Version</td>
               <td><span id="pv-base-version">—</span></td>
             </tr>
             <tr><td class="info-key">Build date</td><td id="pv-date">—</td></tr>
             <tr><td class="info-key">Description</td><td id="pv-desc">—</td></tr>
             <tr><td class="info-key">Type</td><td id="pv-type">—</td></tr>
-            <tr id="pv-hash-row" style="display:none">
+            <tr id="pv-hash-row" class="hidden-display">
               <td class="info-key">SHA256</td>
               <td id="pv-hash" class="hash-display" title="">—</td>
             </tr>
-            <tr id="pv-expiry-row" style="display:none">
+            <tr id="pv-expiry-row" class="hidden-display">
               <td class="info-key">Expires</td>
               <td><span id="bundle-expiry">—</span></td>
             </tr>
-            <tr id="pv-changelog-row" style="display:none">
-              <td class="info-key" style="vertical-align:top">Changes</td>
-              <td id="pv-changelog" style="white-space:pre-wrap;font-size:0.83rem;line-height:1.5">—</td>
+            <tr id="pv-changelog-row" class="hidden-display">
+              <td class="info-key align-top">Changes</td>
+              <td id="pv-changelog" class="pre-wrap-small">—</td>
             </tr>
           </table>
         </div>
 
-        <div id="downgrade-warning" style="display:none">
+        <div id="downgrade-warning" class="hidden-display">
           ⚠️ <strong>This appears to be a downgrade or re-apply.</strong>
           The bundle version is not newer than the currently deployed version.
-          <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
+          <label class="flex-cursor">
             <input type="checkbox" id="allow-downgrade">
             I understand and want to apply anyway
           </label>
         </div>
 
-        <div id="progress-area" style="display:none;margin-top:12px">
+        <div id="progress-area" class="hidden-display-margin">
           <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-fill"></div></div>
-          <div id="progress-label" style="font-size:0.82rem;color:#6a6e73;margin-top:4px">0%</div>
+          <div id="progress-label" class="mt-header">0%</div>
           <div class="speed-label" id="speed-label"></div>
         </div>
 
-        <div style="margin-top:14px" class="btn-group">
+        <div class="mt-lg btn-group">
           <button class="btn btn-primary" id="btn-apply" disabled>Apply Update</button>
-          <button class="btn btn-secondary" id="btn-cancel" style="display:none">Cancel</button>
+          <button class="btn btn-secondary hidden-display" id="btn-cancel">Cancel</button>
         </div>
       </div>
     </div>
@@ -187,17 +187,17 @@
       <span class="card-title">Update History</span>
       <button class="btn btn-secondary btn-sm" onclick="loadHistory()">↻ Refresh</button>
     </div>
-    <div class="card-body" style="padding: 0">
-      <div id="history-loading" class="loading-text" style="padding:14px 16px">Loading…</div>
-      <div id="history-empty" style="display:none" class="loading-text" style="padding:14px 16px">No updates have been applied yet.</div>
-      <table id="history-table" style="display:none;width:100%;border-collapse:collapse;font-size:0.88rem">
+    <div class="card-body p-flush">
+      <div id="history-loading" class="loading-text p-section">Loading…</div>
+      <div id="history-empty" class="hidden-display loading-text p-section">No updates have been applied yet.</div>
+      <table id="history-table" class="visible">
         <thead>
           <tr>
-            <th style="width:26px;padding:8px 8px 8px 16px;background:#f9f9f9;border-bottom:1px solid #e8e8e8"></th>
-            <th style="text-align:left;padding:8px 16px;background:#f9f9f9;border-bottom:1px solid #e8e8e8;font-weight:700;font-size:0.82rem">Version</th>
-            <th style="text-align:left;padding:8px 16px;background:#f9f9f9;border-bottom:1px solid #e8e8e8;font-weight:700;font-size:0.82rem">Applied at</th>
-            <th style="text-align:left;padding:8px 16px;background:#f9f9f9;border-bottom:1px solid #e8e8e8;font-weight:700;font-size:0.82rem">Description</th>
-            <th style="text-align:left;padding:8px 16px;background:#f9f9f9;border-bottom:1px solid #e8e8e8;font-weight:700;font-size:0.82rem">Status</th>
+            <th class="table-header-col"></th>
+            <th class="table-header">Version</th>
+            <th class="table-header">Applied at</th>
+            <th class="table-header">Description</th>
+            <th class="table-header">Status</th>
           </tr>
         </thead>
         <tbody id="history-body"></tbody>
