@@ -121,32 +121,21 @@ tar -xf "$BUNDLE_PATH" -C "$WORK_DIR" version.json 2>/dev/null \
     || fail "Failed to extract version.json from bundle"
 [[ -f "$VERSION_JSON_PATH" ]] || fail "version.json not found in bundle"
 
-# Parse all version.json fields in one Python call
-eval "$(python3 - <<'PYEOF'
-import json, sys
-try:
-    d = json.load(open('/var/tmp/iot-update-work/version.json'))
-    def q(s): return "'" + str(s).replace("'", "'\\''") + "'"
-    print("VERSION=" + q(d.get('version', 'unknown')))
-    print("DRY_RUN=" + q('yes' if d.get('dry_run') else 'no'))
-    print("OCI_IMAGE_FILE=" + q(d.get('oci_image_file', '')))
-    print("BUNDLE_TYPE=" + q(d.get('bundle_type', 'full')))
-    raw_name = d.get('oci_image_name', '')
-    ver = d.get('version', 'unknown')
-    # Fall back to a sensible name if oci_image_name is absent or ends with :unknown
-    if not raw_name or raw_name.endswith(':unknown'):
-        raw_name = 'localhost/inferno-appliance:' + ver
-    print("IMAGE_NAME=" + q(raw_name))
-    print("EXPECTED_SHA256=" + q(d.get('image_sha256', '')))
-except Exception as e:
-    print("VERSION='unknown'")
-    print("DRY_RUN='no'")
-    print("OCI_IMAGE_FILE=''")
-    print("BUNDLE_TYPE='full'")
-    print("IMAGE_NAME='localhost/inferno-appliance:latest'")
-    print("EXPECTED_SHA256=''")
-PYEOF
-)"
+# Parse all version.json fields individually (no eval)
+VERSION=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('version', 'unknown'))" 2>/dev/null || echo "unknown")
+DRY_RUN=$(python3 -c "import json; d=json.load(open('$VERSION_JSON_PATH')); print('yes' if d.get('dry_run') else 'no')" 2>/dev/null || echo "no")
+OCI_IMAGE_FILE=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('oci_image_file', ''))" 2>/dev/null || echo "")
+BUNDLE_TYPE=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('bundle_type', 'full'))" 2>/dev/null || echo "full")
+IMAGE_NAME=$(python3 -c "
+import json
+d = json.load(open('$VERSION_JSON_PATH'))
+raw_name = d.get('oci_image_name', '')
+ver = d.get('version', 'unknown')
+if not raw_name or raw_name.endswith(':unknown'):
+    raw_name = 'localhost/inferno-appliance:' + ver
+print(raw_name)
+" 2>/dev/null || echo "localhost/inferno-appliance:latest")
+EXPECTED_SHA256=$(python3 -c "import json; print(json.load(open('$VERSION_JSON_PATH')).get('image_sha256', ''))" 2>/dev/null || echo "")
 log "INFO" "Bundle metadata: version=${VERSION} dry_run=${DRY_RUN} type=${BUNDLE_TYPE} oci=${OCI_IMAGE_FILE:-none}"
 
 # ── Ed25519 signature verification ───────────────────────────────────────────
