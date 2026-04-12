@@ -12,12 +12,15 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# Sandboxing — sidecar needs /var/lib/iot-updater, /var/tmp, /run
+# Sandboxing — sidecar needs /var/lib/iot-updater, /var/tmp, /run, /tmp
+# Note: /tmp must be writable — bootc status writes a temp file there for SELinux install_t test
+# Note: CapabilityBoundingSet is intentionally omitted — bootc status needs to enter the host
+#       mount namespace (/proc/1/ns/mnt) which requires capabilities beyond any explicit list.
+#       The service runs as root; ProtectSystem+ProtectHome provide the actual confinement.
 ProtectSystem=strict
 ProtectHome=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/iot-updater /var/tmp /run
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SYS_BOOT
+ReadWritePaths=/var/lib/iot-updater /var/tmp /run /tmp
 
 [Install]
 WantedBy=multi-user.target

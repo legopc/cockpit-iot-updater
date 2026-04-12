@@ -276,8 +276,10 @@ def _run_bootc_status():
             "rollback": _parse_slot(status.get("rollback")),
         }
     except Exception as e:
-        # Preserve stale cache on error rather than replacing with error dict
-        if _bootc_cache["data"]:
+        # Preserve valid (non-error) cached data on transient failure rather than
+        # replacing it with an error dict. But if the cache already holds an error,
+        # update it so the timestamp advances and we don't retry on every request.
+        if _bootc_cache["data"] and not _bootc_cache["data"].get("error"):
             return
         data = {"error": str(e), "booted": None, "staged": None, "rollback": None}
     _bootc_cache["data"] = data
@@ -664,7 +666,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         with open(BUNDLE_PATH, mode) as f:
             remaining = content_length
             while remaining > 0:
-                chunk_size = min(remaining, 4 * 1024 * 1024)
+                chunk_size = min(remaining, 16 * 1024 * 1024)
                 data = self.rfile.read(chunk_size)
                 if not data:
                     break
