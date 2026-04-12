@@ -664,7 +664,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         with open(BUNDLE_PATH, mode) as f:
             remaining = content_length
             while remaining > 0:
-                chunk_size = min(remaining, 4 * 1024 * 1024)
+                chunk_size = min(remaining, 16 * 1024 * 1024)
                 data = self.rfile.read(chunk_size)
                 if not data:
                     break

@@ -5,7 +5,7 @@
  * The sidecar binds to 127.0.0.1:8088 and is never exposed directly.
  */
 
-const CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB per chunk
+const CHUNK_SIZE = 64 * 1024 * 1024; // 64 MB per chunk (was 8 MB — reduces round trips from ~275 to ~35 for 2.2GB)
 
 const api       = cockpit.http(8088);
 const uploadApi = cockpit.http(8088, { binary: true });
