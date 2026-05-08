@@ -26,6 +26,7 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 8088
 SESSION_TOKEN = secrets.token_hex(32)
 BUNDLE_PATH       = Path("/var/tmp/iot43-update.iotupdate")
+BUNDLE_PART_PATH  = Path(str(BUNDLE_PATH) + ".part")
 BUNDLE_READY_PATH = Path("/var/lib/iot-updater/bundle-ready")
 HISTORY_PATH = Path("/var/lib/iot-updater/history.json")
 LOG_PATH     = Path("/var/lib/iot-updater/update.log")
@@ -57,6 +58,11 @@ _bootc_lock  = threading.Lock()
 _rate_limits: dict[str, list] = {}
 _rate_lock = threading.Lock()
 
+# Active transfer generation. Incrementing this cancels any background fetch
+# without relying on unlinking a pathname while another thread holds it open.
+_transfer_lock = threading.Lock()
+_transfer_id = 0
+
 
 def _check_rate_limit(endpoint: str, max_requests: int, window_seconds: float) -> bool:
     """Return True if the request is allowed, False if rate limited."""
@@ -70,6 +76,27 @@ def _check_rate_limit(endpoint: str, max_requests: int, window_seconds: float) -
             return False
         _rate_limits[endpoint].append(now)
         return True
+
+
+def start_transfer() -> int:
+    global _transfer_id
+    with _transfer_lock:
+        _transfer_id += 1
+        return _transfer_id
+
+
+def is_transfer_current(transfer_id: int) -> bool:
+    with _transfer_lock:
+        return transfer_id == _transfer_id
+
+
+def cancel_active_transfer(message: str = "Upload cancelled."):
+    start_transfer()
+    BUNDLE_PATH.unlink(missing_ok=True)
+    BUNDLE_PART_PATH.unlink(missing_ok=True)
+    BUNDLE_READY_PATH.unlink(missing_ok=True)
+    set_state(stage="idle", progress_pct=0, message=message,
+              version_info=None, error=None)
 
 
 def set_state(**kwargs):
@@ -580,10 +607,7 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/upload/apply":
             self._handle_apply()
         elif self.path == "/upload/cancel":
-            BUNDLE_PATH.unlink(missing_ok=True)
-            BUNDLE_READY_PATH.unlink(missing_ok=True)
-            set_state(stage="idle", progress_pct=0, message="Upload cancelled.",
-                      version_info=None, error=None)
+            cancel_active_transfer("Upload cancelled.")
             audit("/upload/cancel", "ok")
             self.send_json(200, {"ok": True})
         elif self.path == "/rollback":
@@ -634,7 +658,9 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             req_gb = round(REQUIRED_DISK_BYTES / 1024 ** 3, 1)
             self.send_json(507, {"error": f"Insufficient disk space in /var/tmp: {free_gb} GB free, {req_gb} GB required"})
             return
+        start_transfer()
         BUNDLE_PATH.unlink(missing_ok=True)
+        BUNDLE_PART_PATH.unlink(missing_ok=True)
         BUNDLE_READY_PATH.unlink(missing_ok=True)
         # Clear stale status file from previous run so it cannot bleed into this session
         STATUS_PATH.unlink(missing_ok=True)
@@ -804,7 +830,9 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(507, {"error": f"Insufficient disk space: {free_gb} GB free, {req_gb} GB required"})
             return
 
+        transfer_id = start_transfer()
         BUNDLE_PATH.unlink(missing_ok=True)
+        BUNDLE_PART_PATH.unlink(missing_ok=True)
         BUNDLE_READY_PATH.unlink(missing_ok=True)
         STATUS_PATH.unlink(missing_ok=True)
         set_state(stage="uploading", progress_pct=0,
@@ -814,21 +842,27 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
         audit("/fetch-url", "started", url[:120])
         self.send_json(200, {"ok": True, "url": url})
 
-        threading.Thread(target=self._do_fetch_url, args=(url,), daemon=True).start()
+        threading.Thread(target=self._do_fetch_url, args=(url, transfer_id), daemon=True).start()
 
-    def _do_fetch_url(self, url: str):
+    def _do_fetch_url(self, url: str, transfer_id: int | None = None):
         """Download bundle from URL in background, updating progress state."""
+        if transfer_id is None:
+            transfer_id = start_transfer()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "cockpit-iot-updater/1.0"})
             with urllib.request.urlopen(req, timeout=300) as resp:
                 total = int(resp.headers.get("Content-Length") or 0)
                 downloaded = 0
-                with open(BUNDLE_PATH, "wb") as f:
-                    os.chmod(BUNDLE_PATH, 0o600)
+                with open(BUNDLE_PART_PATH, "wb") as f:
+                    os.chmod(BUNDLE_PART_PATH, 0o600)
                     while True:
                         chunk = resp.read(FETCH_CHUNK_SIZE)
                         if not chunk:
                             break
+                        if not is_transfer_current(transfer_id):
+                            audit("/fetch-url", "cancelled", url[:120])
+                            BUNDLE_PART_PATH.unlink(missing_ok=True)
+                            return
                         f.write(chunk)
                         downloaded += len(chunk)
                         if total > 0:
@@ -836,36 +870,81 @@ class UpdateHandler(http.server.BaseHTTPRequestHandler):
                             mb = downloaded / 1024 / 1024
                             set_state(stage="uploading", progress_pct=pct,
                                       message=f"Fetching… {mb:.1f} MB downloaded")
+
+            if not is_transfer_current(transfer_id):
+                audit("/fetch-url", "cancelled", url[:120])
+                BUNDLE_PART_PATH.unlink(missing_ok=True)
+                return
+            os.replace(BUNDLE_PART_PATH, BUNDLE_PATH)
         except urllib.error.URLError as e:
+            if not is_transfer_current(transfer_id):
+                audit("/fetch-url", "cancelled", url[:120])
+                BUNDLE_PART_PATH.unlink(missing_ok=True)
+                return
             err = f"Fetch failed: {e.reason}"
             BUNDLE_PATH.unlink(missing_ok=True)
+            BUNDLE_PART_PATH.unlink(missing_ok=True)
             audit("/fetch-url", "error", err[:120])
             set_state(stage="error", message=err, error=err)
             return
         except Exception as e:
+            if not is_transfer_current(transfer_id):
+                audit("/fetch-url", "cancelled", url[:120])
+                BUNDLE_PART_PATH.unlink(missing_ok=True)
+                return
             err = f"Fetch error: {e}"
             BUNDLE_PATH.unlink(missing_ok=True)
+            BUNDLE_PART_PATH.unlink(missing_ok=True)
             audit("/fetch-url", "error", err[:120])
             set_state(stage="error", message=err, error=err)
+            return
+
+        if not is_transfer_current(transfer_id):
+            audit("/fetch-url", "cancelled", url[:120])
+            BUNDLE_PATH.unlink(missing_ok=True)
             return
 
         # Metadata extraction + verification (same as upload path)
         set_state(stage="extracting", progress_pct=100, message="Reading bundle metadata…")
         version_info = extract_version_from_bundle(BUNDLE_PATH)
+        if not is_transfer_current(transfer_id):
+            audit("/fetch-url", "cancelled", url[:120])
+            BUNDLE_PATH.unlink(missing_ok=True)
+            return
         if not version_info or "error" in version_info:
             err = (version_info or {}).get("error", "version.json missing or invalid")
             BUNDLE_PATH.unlink(missing_ok=True)
+            audit("/fetch-url", "error", err[:120])
             set_state(stage="error", message=f"Bundle error: {err}", error=err)
             return
 
         if version_info.get("image_sha256"):
+            if not is_transfer_current(transfer_id):
+                audit("/fetch-url", "cancelled", url[:120])
+                BUNDLE_PATH.unlink(missing_ok=True)
+                return
             set_state(stage="verifying", progress_pct=100,
                       message="Verifying bundle integrity (sha256)…")
             ok, result = verify_bundle_hash(BUNDLE_PATH, version_info)
+            if not is_transfer_current(transfer_id):
+                audit("/fetch-url", "cancelled", url[:120])
+                BUNDLE_PATH.unlink(missing_ok=True)
+                return
             if not ok:
                 BUNDLE_PATH.unlink(missing_ok=True)
+                audit("/fetch-url", "error", result[:120])
                 set_state(stage="error", message=result, error=result)
                 return
+
+        if total > 0:
+            version_info = dict(version_info)
+            version_info.setdefault("bundle_size_bytes", total)
+            version_info.setdefault("source", "url")
+
+        if not is_transfer_current(transfer_id):
+            audit("/fetch-url", "cancelled", url[:120])
+            BUNDLE_PATH.unlink(missing_ok=True)
+            return
 
         BUNDLE_READY_PATH.write_text(json.dumps({
             "version": version_info.get("version", "unknown"),

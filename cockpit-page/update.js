@@ -62,6 +62,7 @@ function showToast(type, msg, autoDismiss) {
 var statusFailCount = 0;
 var rebootCountdown = null;
 var _prevStage = null;
+var previewLoadInFlight = false;
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async function() {
@@ -113,7 +114,6 @@ document.addEventListener("DOMContentLoaded", async function() {
         if (state.statusPoller) clearTimeout(state.statusPoller);
         if (state.bootcPoller)  clearTimeout(state.bootcPoller);
         if (rebootCountdown)    clearInterval(rebootCountdown);
-        try { api.request({ method: "POST", path: "/upload/cancel", body: "", headers: authHeaders() }); } catch(e) {}
     });
 });
 
@@ -125,6 +125,9 @@ function pollStatus() {
             var s = JSON.parse(text);
             state.sidecarOk = true;
             document.getElementById("sidecar-warn").style.display = "none";
+            if (s.stage === "idle" && s.version_info && !state.versionPreview && !previewLoadInFlight) {
+                loadReadyBundlePreview(s.version_info);
+            }
             renderStatus(s);
             if (s.stage === "idle" && s.message && s.message.indexOf("applied") !== -1) {
                 loadHistory();
@@ -144,6 +147,22 @@ function pollStatus() {
         })
         .always(function() {
             state.statusPoller = setTimeout(pollStatus, 2000);
+        });
+}
+
+function loadReadyBundlePreview(fallbackInfo) {
+    previewLoadInFlight = true;
+    api.get("/version-preview")
+        .then(function(text) {
+            state.versionPreview = JSON.parse(text);
+            showVersionPreview(state.versionPreview);
+        })
+        .catch(function() {
+            state.versionPreview = fallbackInfo;
+            showVersionPreview(state.versionPreview);
+        })
+        .always(function() {
+            previewLoadInFlight = false;
         });
 }
 
@@ -587,8 +606,13 @@ function showVersionPreview(info) {
     applyBtn.textContent = info.dry_run ? "Apply v" + stripV(info.version) + " (dry run)" : "Apply & Reboot v" + stripV(info.version);
     applyBtn.disabled    = isDowngrade() && !document.getElementById("allow-downgrade").checked;
 
-    document.getElementById("dz-sub").textContent =
-        (state.selectedFile.size / 1024 / 1024).toFixed(1) + " MB — ready to apply";
+    var readyText = "Bundle ready to apply";
+    if (state.selectedFile && typeof state.selectedFile.size === "number") {
+        readyText = (state.selectedFile.size / 1024 / 1024).toFixed(1) + " MB — ready to apply";
+    } else if (typeof info.bundle_size_bytes === "number") {
+        readyText = (info.bundle_size_bytes / 1024 / 1024).toFixed(1) + " MB — ready to apply";
+    }
+    document.getElementById("dz-sub").textContent = readyText;
 }
 
 function isDowngrade() {
